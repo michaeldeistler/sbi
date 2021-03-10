@@ -239,7 +239,8 @@ class NeuralInference(ABC):
             warn_on_invalid: Whether to give out a warning if invalid simulations were
                 found.
 
-        Returns: Parameters, simulation outputs, prior masks.
+        Returns: Parameters, simulation outputs, scores (if they had been passed in 
+            `append_simulations`), and prior masks.
         """
 
         theta = get_simulations_since_round(

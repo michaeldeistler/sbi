@@ -10,6 +10,8 @@ from sbi.types import TensorboardSummaryWriter
 from sbi.utils import del_entries
 from torch import autograd, Tensor
 import torch
+from sbi.utils import validate_theta_and_x
+from sbi.utils.sbiutils import mask_sims_from_prior
 
 
 class SCANDAL(LikelihoodEstimator):
@@ -55,6 +57,47 @@ class SCANDAL(LikelihoodEstimator):
 
         kwargs = del_entries(locals(), entries=("self", "__class__", "unused_args"))
         super().__init__(**kwargs, **unused_args)
+
+    def append_simulations(
+        self,
+        theta: Tensor,
+        x: Tensor,
+        from_round: int = 0,
+        score: Optional[Tensor] = None,
+    ) -> "LikelihoodEstimator":
+        r"""
+        Store parameters and simulation outputs to use them for later training.
+
+        Data are stored as entries in lists for each type of variable (parameter/data).
+
+        Stores $\theta$, $x$, prior_masks (indicating if simulations are coming from the
+        prior or not) and an index indicating which round the batch of simulations came
+        from.
+
+        Args:
+            theta: Parameter sets.
+            x: Simulation outputs.
+            from_round: Which round the data stemmed from. Round 0 means from the prior.
+                With default settings, this is not used at all for `SNLE`. Only when
+                the user later on requests `.train(discard_prior_samples=True)`, we
+                use these indices to find which training data stemmed from the prior.
+            score: Joint score $\Nabla_{\theta}(p(x,z|\theta))$. If passed, the joint
+                score will be used during training to regularize the likelihood
+                estimate (see Brehmer, Louppe, Cranmer 2020 PNAS).
+
+        Returns:
+            NeuralInference object (returned so that this function is chainable).
+        """
+
+        validate_theta_and_x(theta, x)
+
+        self._theta_roundwise.append(theta)
+        self._x_roundwise.append(x)
+        self._prior_masks.append(mask_sims_from_prior(int(from_round), theta.size(0)))
+        self._data_round_index.append(int(from_round))
+        self._score_roundwise.append(score)
+
+        return self
 
     def train(
         self,
@@ -110,7 +153,20 @@ class SCANDAL(LikelihoodEstimator):
         kwargs = del_entries(locals(), entries=("self", "__class__"))
         return super().train(**kwargs)
 
-    def _loss(self, theta, x, score, score_lambda):
+    def _loss(self, theta: Tensor, x: Tensor, score: Tensor, score_lambda: float):
+        r"""
+        Returns the loss (mixture between MLE and score-matching).
+
+        Args:
+            theta:
+            x:
+            score:
+            score_lambda:
+
+        Returns:
+            Loss.
+        """
+
         # Evaluate on x with theta as context.
         self._neural_net.train()
         log_prob = self._neural_net.log_prob(x, context=theta)
@@ -123,6 +179,17 @@ class SCANDAL(LikelihoodEstimator):
         return loss
 
     def _score_loss(self, theta, x, score):
+        r"""
+        Returns the mean-squared error loss between the true and estimated score.
+
+        Args:
+            theta:
+            x:
+            score:
+
+        Returns:
+            Mean-squared error loss for the score.
+        """
         self._neural_net.eval()
         with torch.enable_grad():
             theta = theta.clone().requires_grad_(True)

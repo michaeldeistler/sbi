@@ -79,11 +79,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
         self._summary.update({"mcmc_times": []})  # type: ignore
 
     def append_simulations(
-        self,
-        theta: Tensor,
-        x: Tensor,
-        from_round: int = 0,
-        score: Optional[Tensor] = None,
+        self, theta: Tensor, x: Tensor, from_round: int = 0,
     ) -> "LikelihoodEstimator":
         r"""
         Store parameters and simulation outputs to use them for later training.
@@ -101,9 +97,6 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 With default settings, this is not used at all for `SNLE`. Only when
                 the user later on requests `.train(discard_prior_samples=True)`, we
                 use these indices to find which training data stemmed from the prior.
-            score: Joint score $\Nabla_{\theta}(p(x,z|\theta))$. If passed, the joint
-                score will be used during training to regularize the likelihood
-                estimate (see Brehmer, Louppe, Cranmer 2020 PNAS).
 
         Returns:
             NeuralInference object (returned so that this function is chainable).
@@ -115,11 +108,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
         self._x_roundwise.append(x)
         self._prior_masks.append(mask_sims_from_prior(int(from_round), theta.size(0)))
         self._data_round_index.append(int(from_round))
-
-        if score is not None:
-            self._score_roundwise.append(score)
-        else:
-            self._score_roundwise.append(torch.tensor([[False]] * theta.size(0)))
+        self._score_roundwise.append(torch.tensor([[False]] * theta.size(0)))
 
         return self
 
@@ -271,7 +260,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
 
         return deepcopy(self._neural_net)
 
-    def _loss(self, theta, x, score, score_lambda):
+    def _loss(self, theta: Tensor, x: Tensor, score: Tensor, score_lambda: float):
         pass
 
     def build_posterior(
