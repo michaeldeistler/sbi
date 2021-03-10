@@ -478,8 +478,8 @@ def within_support(distribution: Any, samples: Tensor) -> Tensor:
     returns whether it is finite or not (this hanldes e.g. `NeuralPosterior`). Only
     checking whether the log-probabilty is not `-inf` will not work because, as of
     torch v1.8.0, a `torch.distribution` will throw an error at `log_prob()` when the
-    sample is out of the support (see #451). In `prepare_for_sbi()`, we set 
-    `validate_args=False`. Thish would take care of this, but requires running 
+    sample is out of the support (see #451). In `prepare_for_sbi()`, we set
+    `validate_args=False`. Thish would take care of this, but requires running
     `prepare_for_sbi()` and otherwise throws a cryptic error.
 
     Args:
@@ -493,8 +493,8 @@ def within_support(distribution: Any, samples: Tensor) -> Tensor:
         sample_check = distribution.support.check(samples)
 
         # Before torch v1.7.0, `support.check()` returned bools for every element. From
-        # v1.8.0 on, it directly considers all dimensions of a sample. E.g., for a 
-        # single sample in 3D, v1.7.0 would return [[True, True, True]] and v1.8.0 
+        # v1.8.0 on, it directly considers all dimensions of a sample. E.g., for a
+        # single sample in 3D, v1.7.0 would return [[True, True, True]] and v1.8.0
         # would return [True].
         if sample_check.ndim > 1:
             return torch.all(distribution.support.check(samples), axis=1)

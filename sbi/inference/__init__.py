@@ -20,6 +20,8 @@ from sbi.inference.base import (  # noqa: F401
     simulate_for_sbi,
 )
 from sbi.inference.snle.snle_a import SNLE_A
+from sbi.inference.snle.scandal import SCANDAL
+
 # Unimplemented: don't export
 # from sbi.inference.snpe.snpe_a import SNPE_A
 from sbi.inference.snpe.snpe_b import SNPE_B

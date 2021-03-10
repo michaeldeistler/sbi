@@ -136,9 +136,14 @@ class NeuralInference(ABC):
 
         self._show_progress_bars = show_progress_bars
 
-        # Initialize roundwise (theta, x, prior_masks) for storage of parameters,
-        # simulations and masks indicating if simulations came from prior.
-        self._theta_roundwise, self._x_roundwise, self._prior_masks = [], [], []
+        # Initialize roundwise (theta, x, scores prior_masks) for storage of
+        # parameters, simulations, joint score, and masks indicating if simulations
+        # came from prior.
+        self._theta_roundwise = []
+        self._x_roundwise = []
+        self._score_roundwise = []
+        self._prior_masks = []
+
         self._model_bank = []
 
         # Initialize list that indicates the round from which simulations were drawn.
@@ -243,6 +248,9 @@ class NeuralInference(ABC):
         x = get_simulations_since_round(
             self._x_roundwise, self._data_round_index, starting_round
         )
+        score = get_simulations_since_round(
+            self._score_roundwise, self._data_round_index, starting_round
+        )
         prior_masks = get_simulations_since_round(
             self._prior_masks, self._data_round_index, starting_round
         )
@@ -257,7 +265,12 @@ class NeuralInference(ABC):
                 num_nans, num_infs, exclude_invalid_x, type(self).__name__, self._round
             )
 
-        return theta[is_valid_x], x[is_valid_x], prior_masks[is_valid_x]
+        return (
+            theta[is_valid_x],
+            x[is_valid_x],
+            score[is_valid_x],
+            prior_masks[is_valid_x],
+        )
 
     @abstractmethod
     def train(
@@ -379,9 +392,7 @@ class NeuralInference(ABC):
 
         method = self.__class__.__name__
         logdir = Path(
-            get_log_root(),
-            method,
-            datetime.now().isoformat().replace(":", "_"),
+            get_log_root(), method, datetime.now().isoformat().replace(":", "_"),
         )
         return SummaryWriter(logdir)
 
@@ -442,11 +453,7 @@ class NeuralInference(ABC):
         assert torch.isfinite(quantity).all(), msg
 
     def _summarize(
-        self,
-        round_: int,
-        x_o: Union[Tensor, None],
-        theta_bank: Tensor,
-        x_bank: Tensor,
+        self, round_: int, x_o: Union[Tensor, None], theta_bank: Tensor, x_bank: Tensor,
     ) -> None:
         """Update the summary_writer with statistics for a given round.
 
@@ -461,12 +468,7 @@ class NeuralInference(ABC):
         # Median |x - x0| for most recent round.
         if x_o is not None:
             median_observation_distance = torch.median(
-                torch.sqrt(
-                    torch.sum(
-                        (x_bank - x_o.reshape(1, -1)) ** 2,
-                        dim=-1,
-                    )
-                )
+                torch.sqrt(torch.sum((x_bank - x_o.reshape(1, -1)) ** 2, dim=-1,))
             )
             self._summary["median_observation_distances"].append(
                 median_observation_distance.item()
@@ -549,11 +551,7 @@ def simulate_for_sbi(
     theta = proposal.sample((num_simulations,))
 
     x = simulate_in_batches(
-        simulator,
-        theta,
-        simulation_batch_size,
-        num_workers,
-        show_progress_bar,
+        simulator, theta, simulation_batch_size, num_workers, show_progress_bar,
     )
 
     return theta, x
