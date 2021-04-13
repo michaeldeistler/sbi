@@ -126,6 +126,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
         retrain_from_scratch_each_round: bool = False,
         show_train_summary: bool = False,
         dataloader_kwargs: Optional[Dict] = None,
+        mle_lambda: float = 1.0,
         score_lambda: float = 1e-6,
     ) -> LikelihoodBasedPosterior:
         r"""
@@ -161,6 +162,10 @@ class LikelihoodEstimator(NeuralInference, ABC):
         theta, x, score, _ = self.get_simulations(
             start_idx, exclude_invalid_x, warn_on_invalid=True
         )
+
+        if torch.any(score):
+            self.score_stds = torch.std(score, dim=0)
+            self.score_means = torch.mean(score, dim=0)
 
         # Dataset is shared for training and validation loaders.
         dataset = data.TensorDataset(theta, x, score)
@@ -206,9 +211,14 @@ class LikelihoodEstimator(NeuralInference, ABC):
                     batch[1].to(self._device),
                     batch[2].to(self._device),
                 )
-
                 batch_loss = torch.mean(
-                    self._loss(theta_batch, x_batch, score_batch, score_lambda)
+                    self._loss(
+                        theta_batch,
+                        x_batch,
+                        score=score_batch,
+                        mle_lambda=mle_lambda,
+                        score_lambda=score_lambda,
+                    )
                 )
                 batch_loss.backward()
                 if clip_max_norm is not None:
@@ -230,7 +240,11 @@ class LikelihoodEstimator(NeuralInference, ABC):
                     )
                     # Evaluate on x with theta as context.
                     batch_log_prob = -self._loss(
-                        theta_batch, x_batch, score_batch, score_lambda
+                        theta_batch,
+                        x_batch,
+                        score=score_batch,
+                        mle_lambda=mle_lambda,
+                        score_lambda=score_lambda,
                     )
                     log_prob_sum += batch_log_prob.sum().item()
             # Take mean over all validation samples.

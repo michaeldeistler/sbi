@@ -113,6 +113,7 @@ class SCANDAL(LikelihoodEstimator):
         retrain_from_scratch_each_round: bool = False,
         show_train_summary: bool = False,
         dataloader_kwargs: Optional[Dict] = None,
+        mle_lambda: float = 1.0,
         score_lambda: float = 1e-6,
     ) -> NeuralPosterior:
         r"""
@@ -144,6 +145,7 @@ class SCANDAL(LikelihoodEstimator):
                 loss and leakage after the training.
             dataloader_kwargs: Additional or updated kwargs to be passed to the training
                 and validation dataloaders (like, e.g., a collate_fn).
+            mle_lambda: Weighing factor for the MLE-loss.
             score_lambda: Weighing factor of the mean-squared-error loss imposed on the 
                 scores.
 
@@ -153,7 +155,14 @@ class SCANDAL(LikelihoodEstimator):
         kwargs = del_entries(locals(), entries=("self", "__class__"))
         return super().train(**kwargs)
 
-    def _loss(self, theta: Tensor, x: Tensor, score: Tensor, score_lambda: float):
+    def _loss(
+        self,
+        theta: Tensor,
+        x: Tensor,
+        score: Tensor,
+        mle_lambda: float,
+        score_lambda: float,
+    ):
         r"""
         Returns the loss (mixture between MLE and score-matching).
 
@@ -170,11 +179,12 @@ class SCANDAL(LikelihoodEstimator):
         # Evaluate on x with theta as context.
         self._neural_net.train()
         log_prob = self._neural_net.log_prob(x, context=theta)
-        loss = -log_prob
+        loss = mle_lambda * (-log_prob)
 
         # Add the score-loss to the neural density estimator.
         if torch.any(score.bool()):
-            loss += score_lambda * self._score_loss(theta, x, score)
+            score_loss = self._score_loss(theta, x, score)
+            loss += score_lambda * score_loss
 
         return loss
 
@@ -203,9 +213,18 @@ class SCANDAL(LikelihoodEstimator):
                 only_inputs=True,
             )[0]
 
-        # Compute MSE-loss of true score and estimated score.
+        # If some simulations do not have a score, they are discarded.
         score_is_available = score.bool()
+
+        # print("estimated_score_before", estimated_score[:3])
+        estimated_score = (estimated_score - self.score_means) / self.score_stds
+        score = (score - self.score_means) / self.score_stds
+        # print("true     _score after ", score[:3])
+
+        # Compute MSE-loss of true score and estimated score.
         score_loss = (
             estimated_score[score_is_available] - score[score_is_available].float()
         ) ** 2
+        score_loss = torch.reshape(score_loss, score.shape).sum(dim=1)
         return score_loss
+
