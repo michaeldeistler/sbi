@@ -18,11 +18,6 @@ class PriorMatchingProposal(nn.Module):
     ) -> None:
         super().__init__()
 
-        # As detailed in the docstring, `density_estimator` is either a string or
-        # a callable. The function creating the neural network is attached to
-        # `_build_neural_net`. It will be called in the first round and receive
-        # thetas and xs as inputs, so that they can be used for shape inference and
-        # potentially for z-scoring.
         if isinstance(density_estimator, str):
             self._build_neural_net = utils.vi_nn(model=density_estimator)
         else:
@@ -36,7 +31,16 @@ class PriorMatchingProposal(nn.Module):
         self._thr = self._identify_cutoff(num_samples_to_estimate, quantile)
 
     def sample(self, sample_shape: torch.Size) -> Tensor:
-        self._xos = self._posterior.default_x.repeat(sample_shape[0], 1)
+        """
+        Sample from the prior matching proposal.
+
+        Args:
+            sample_shape: Shape of the samples.
+
+        Returns:
+            Tensor: Samples.
+        """
+        xos = self._posterior.default_x.repeat(sample_shape[0], 1)
 
         with torch.no_grad():
             self._posterior.net.eval()
@@ -44,18 +48,27 @@ class PriorMatchingProposal(nn.Module):
 
             base_samples = self._neural_net.sample(sample_shape[0])
             prior_matching_samples, _ = self._posterior.net._transform.inverse(
-                base_samples, context=self._xos
+                base_samples, context=xos
             )
             return prior_matching_samples
 
     def log_prob(self, theta: Tensor) -> Tensor:
-        self._xos = self._posterior.default_x.repeat(theta.shape[0], 1)
+        """
+        Log-probability of a parameter under the prior matching proposal.
+
+        Args:
+            theta: Parameter set.
+
+        Returns:
+            Tensor: Log-probability of the prior matching proposal.
+        """
+        xos = self._posterior.default_x.repeat(theta.shape[0], 1)
 
         with torch.no_grad():
             self._posterior.net.eval()
             self._neural_net.train()
 
-            noise, logabsdet = self._posterior.net._transform(theta, context=self._xos)
+            noise, logabsdet = self._posterior.net._transform(theta, context=xos)
             vi_log_prob = self._neural_net.log_prob(noise)
             return vi_log_prob + logabsdet
 
@@ -81,8 +94,6 @@ class PriorMatchingProposal(nn.Module):
             Density estimator that approximates the distribution $p(\theta|x)$.
         """
 
-        # Move entire net to device for training.
-        # self._neural_net.to(self._device)
         self._xos = self._posterior.default_x.repeat(num_elbo_particles, 1)
 
         self.optimizer = optim.Adam(
@@ -94,9 +105,7 @@ class PriorMatchingProposal(nn.Module):
             # Train for a single epoch.
             self._neural_net.train()
             self.optimizer.zero_grad()
-            # Get batches on current device.
-            variational_samples = self._neural_net.sample(num_elbo_particles)
-            elbo_loss = -torch.mean(self._elbo(variational_samples))
+            elbo_loss = -torch.mean(self._elbo(num_elbo_particles))
 
             elbo_loss.backward()
             if clip_max_norm is not None:
@@ -107,20 +116,42 @@ class PriorMatchingProposal(nn.Module):
             self.optimizer.step()
             print("Training neural network. Epochs trained: ", epoch, end="\r")
 
-    def _target_density(self, var_samples: Tensor) -> Tensor:
+    def _target_density(self, variational_samples: Tensor) -> Tensor:
+        r"""
+        Returns $p(\theta|x), \theta ~ q(\theta)$.
+        
+        In the above equation, $p(\theta|x)# is the thresholded posterior in latent
+        space.
+
+        Args:
+            variational_samples: Samples from the variational distribution $q(\theta)$
+
+        Returns:
+            Tensor: The pdf.
+        """
 
         _, logabsdet = self._posterior.net._transform.inverse(
-            var_samples, context=self._xos
+            variational_samples, context=self._xos
         )
         sample_logprob = (
-            self._posterior.net._distribution.log_prob(var_samples) - logabsdet
+            self._posterior.net._distribution.log_prob(variational_samples) - logabsdet
         )
         below_thr = sample_logprob < self._thr
         target_density = logabsdet
         target_density[below_thr] = sample_logprob[below_thr]
         return target_density
 
-    def _elbo(self, variational_samples: Tensor) -> Tensor:
+    def _elbo(self, num_elbo_particles: int) -> Tensor:
+        r"""
+        Returns the evidence lower bound.
+
+        Args:
+            variational_samples: Samples from the variational distribution $q(\theta)$
+
+        Returns:
+            Tensor: The ELBO.
+        """
+        variational_samples = self._neural_net.sample(num_elbo_particles)
         entropy = -self._neural_net.log_prob(variational_samples)
         mismatch = self._target_density(variational_samples)
         return entropy + mismatch
@@ -128,8 +159,20 @@ class PriorMatchingProposal(nn.Module):
     def _identify_cutoff(
         self, num_samples_to_estimate: int = 10_000, quantile: float = 0.0
     ) -> Tensor:
+        """
+        Returns the log-probability at which to threshold the posterior.
+
+        Args:
+            num_samples_to_estimate: Number of posterior samples used to estimate the 
+                threshold.
+            quantile: Of the `num_samples_to_estimate`, we take the log-probablity of 
+                the `quantile` lowest one as the threshold.
+
+        Returns:
+            Tensor: The threshold.
+        """
         self._posterior.net.eval()
         samples = self._posterior.sample((num_samples_to_estimate,))
         sample_probs = self._posterior.log_prob(samples)
         sorted_probs, _ = torch.sort(sample_probs)
-        return sorted_probs[int(quantile * num_samples_to_estimate)]  # - 15.0
+        return sorted_probs[int(quantile * num_samples_to_estimate)]
