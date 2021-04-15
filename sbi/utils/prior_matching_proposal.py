@@ -35,7 +35,7 @@ class PriorMatchingProposal(nn.Module):
         self._prior = prior
         self._thr = self._identify_cutoff(num_samples_to_estimate, quantile)
 
-    def sample(self, sample_shape) -> Tensor:
+    def sample(self, sample_shape: torch.Size) -> Tensor:
         self._xos = self._posterior.default_x.repeat(sample_shape[0], 1)
 
         with torch.no_grad():
@@ -48,7 +48,7 @@ class PriorMatchingProposal(nn.Module):
             )
             return prior_matching_samples
 
-    def log_prob(self, theta) -> Tensor:
+    def log_prob(self, theta: Tensor) -> Tensor:
         self._xos = self._posterior.default_x.repeat(theta.shape[0], 1)
 
         with torch.no_grad():
@@ -107,9 +107,7 @@ class PriorMatchingProposal(nn.Module):
             self.optimizer.step()
             print("Training neural network. Epochs trained: ", epoch, end="\r")
 
-    def _target_density(
-        self, var_samples: Tensor
-    ) -> Tensor:
+    def _target_density(self, var_samples: Tensor) -> Tensor:
 
         _, logabsdet = self._posterior.net._transform.inverse(
             var_samples, context=self._xos
