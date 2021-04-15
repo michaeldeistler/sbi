@@ -10,7 +10,7 @@ from torch import Tensor, log, nn
 from sbi import utils as utils
 from sbi.inference.posteriors.base_posterior import NeuralPosterior
 from sbi.types import ScalarFloat, Shape
-from sbi.utils import del_entries
+from sbi.utils import del_entries, PriorMatchingProposal
 from sbi.utils.torchutils import (
     batched_first_of_batch,
     ensure_theta_batched,
@@ -475,6 +475,27 @@ class DirectPosterior(NeuralPosterior):
             show_progress_bars=show_progress_bars,
             log_prob_kwargs={"norm_posterior": False},
         )
+
+    def build_prior_matching_proposal(self, method: str = "vi"):
+        """
+        Returns a distribution that matches the prior on the support of the posterior.
+
+        Args:
+            method: How to build the proposal.
+
+        Returns:
+            Distribution with `.sample()` and `.log_prob()`.
+        """
+        if method == "vi":
+            pmp = PriorMatchingProposal(self, self._prior, "nsf")
+            pmp.train(max_num_epochs=150)
+            return pmp
+        else:
+            raise NameError
+        
+
+
+
 
 
 class PotentialFunctionProvider:
