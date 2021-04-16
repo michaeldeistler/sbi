@@ -59,4 +59,4 @@ from sbi.utils.user_input_checks import (
     validate_theta_and_x,
 )
 from sbi.utils.user_input_checks_utils import MultipleIndependent
-from sbi.utils.prior_matching_proposal import PriorMatchingProposal
+from sbi.utils.prior_matching_proposal import PriorMatchingProposal, PriorRejectionProposal

@@ -10,7 +10,7 @@ from torch import Tensor, log, nn
 from sbi import utils as utils
 from sbi.inference.posteriors.base_posterior import NeuralPosterior
 from sbi.types import ScalarFloat, Shape
-from sbi.utils import del_entries, PriorMatchingProposal
+from sbi.utils import del_entries, PriorMatchingProposal, PriorRejectionProposal
 from sbi.utils.torchutils import (
     batched_first_of_batch,
     ensure_theta_batched,
@@ -489,6 +489,9 @@ class DirectPosterior(NeuralPosterior):
         if method == "vi":
             pmp = PriorMatchingProposal(self, self._prior, "nsf")
             pmp.train(max_num_epochs=150)
+            return pmp
+        elif method == "rejection":
+            pmp = PriorRejectionProposal(self, self._prior)
             return pmp
         else:
             raise NameError

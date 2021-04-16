@@ -5,6 +5,8 @@ from typing import Any, Optional, Callable
 from torch import optim
 from torch.nn.utils import clip_grad_norm_
 from copy import deepcopy
+from sbi.types import Shape
+from tqdm.auto import tqdm
 
 
 class PriorMatchingProposal(nn.Module):
@@ -15,6 +17,7 @@ class PriorMatchingProposal(nn.Module):
         density_estimator: str,
         num_samples_to_estimate: int = 10_000,
         quantile: float = 0.0,
+        log_prob_offset: float = 0.0,
     ) -> None:
         super().__init__()
 
@@ -28,9 +31,11 @@ class PriorMatchingProposal(nn.Module):
         self._posterior = deepcopy(posterior)
         self._posterior.net.eval()
         self._prior = prior
-        self._thr = self._identify_cutoff(num_samples_to_estimate, quantile)
+        self._thr = identify_cutoff(
+            posterior, num_samples_to_estimate, quantile, log_prob_offset
+        )
 
-    def sample(self, sample_shape: torch.Size) -> Tensor:
+    def sample(self, sample_shape: Shape = torch.Size()) -> Tensor:
         """
         Sample from the prior matching proposal.
 
@@ -75,7 +80,7 @@ class PriorMatchingProposal(nn.Module):
     def train(
         self,
         learning_rate: float = 5e-4,
-        max_num_epochs: int = 1_000,
+        max_num_epochs: int = 200,
         num_elbo_particles: int = 100,
         clip_max_norm: Optional[float] = 5.0,
     ) -> nn.Module:
@@ -119,7 +124,7 @@ class PriorMatchingProposal(nn.Module):
     def _target_density(self, variational_samples: Tensor) -> Tensor:
         r"""
         Returns $p(\theta|x), \theta ~ q(\theta)$.
-        
+
         In the above equation, $p(\theta|x)# is the thresholded posterior in latent
         space.
 
@@ -137,7 +142,7 @@ class PriorMatchingProposal(nn.Module):
             self._posterior.net._distribution.log_prob(variational_samples) - logabsdet
         )
         below_thr = sample_logprob < self._thr
-        target_density = logabsdet
+        target_density = logabsdet + self._prior.log_prob(variational_samples)
         target_density[below_thr] = sample_logprob[below_thr]
         return target_density
 
@@ -156,23 +161,137 @@ class PriorMatchingProposal(nn.Module):
         mismatch = self._target_density(variational_samples)
         return entropy + mismatch
 
-    def _identify_cutoff(
-        self, num_samples_to_estimate: int = 10_000, quantile: float = 0.0
+
+class PriorRejectionProposal:
+    def __init__(
+        self,
+        posterior,
+        prior,
+        num_samples_to_estimate: int = 10_000,
+        quantile: float = 0.0,
+        log_prob_offset: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self._dim_theta = int(prior.sample((1,)).shape[1])
+        self._posterior = deepcopy(posterior)
+        self._posterior.net.eval()
+        self._prior = prior
+        self._thr = identify_cutoff(
+            posterior, num_samples_to_estimate, quantile, log_prob_offset
+        )
+
+    def sample(
+        self,
+        sample_shape: Shape = torch.Size(),
+        show_progress_bars: bool = False,
+        max_sampling_batch_size: int = 10_000,
     ) -> Tensor:
         """
-        Returns the log-probability at which to threshold the posterior.
+        Return samples from the `RestrictedPrior`.
+
+        Samples are obtained by sampling from the prior, evaluating them under the
+        trained classifier (`RestrictionEstimator`) and using only those that were
+        accepted.
 
         Args:
-            num_samples_to_estimate: Number of posterior samples used to estimate the 
-                threshold.
-            quantile: Of the `num_samples_to_estimate`, we take the log-probablity of 
-                the `quantile` lowest one as the threshold.
+            sample_shape: Shape of the returned samples.
+            show_progress_bars: Whether or not to show a progressbar during sampling.
+            max_sampling_batch_size: Batch size for drawing samples from the posterior.
+            Takes effect only in the second iteration of the loop below, i.e., in case
+            of leakage or `num_samples>max_sampling_batch_size`. Larger batch size
+            speeds up sampling.
 
         Returns:
-            Tensor: The threshold.
+            Samples from the `RestrictedPrior`.
         """
-        self._posterior.net.eval()
-        samples = self._posterior.sample((num_samples_to_estimate,))
-        sample_probs = self._posterior.log_prob(samples)
-        sorted_probs, _ = torch.sort(sample_probs)
-        return sorted_probs[int(quantile * num_samples_to_estimate)]
+
+        num_samples = torch.Size(sample_shape).numel()
+        num_sampled_total, num_remaining = 0, num_samples
+        accepted, acceptance_rate = [], float("Nan")
+
+        # Progress bar can be skipped.
+        pbar = tqdm(
+            disable=not show_progress_bars,
+            total=num_samples,
+            desc=f"Drawing {num_samples} posterior samples",
+        )
+
+        # To cover cases with few samples without leakage:
+        sampling_batch_size = min(num_samples, max_sampling_batch_size)
+        while num_remaining > 0:
+            # Sample and reject.
+            candidates = self._prior.sample((sampling_batch_size,)).reshape(
+                sampling_batch_size, -1
+            )
+            are_accepted_by_classifier = self.log_prob(candidates)
+            samples = candidates[are_accepted_by_classifier.bool()]
+            accepted.append(samples)
+
+            # Update.
+            num_sampled_total += sampling_batch_size
+            num_remaining -= samples.shape[0]
+            pbar.update(samples.shape[0])
+
+            # To avoid endless sampling when leakage is high, we raise a warning if the
+            # acceptance rate is too low after the first 1_000 samples.
+            acceptance_rate = (num_samples - num_remaining) / num_sampled_total
+
+            # For remaining iterations (leakage or many samples) continue sampling with
+            # fixed batch size.
+            sampling_batch_size = max_sampling_batch_size
+
+        pbar.close()
+        print(
+            f"The classifier rejected {(1.0 - acceptance_rate) * 100:.1f}% of all "
+            f"samples. You will get a speed-up of "
+            f"{(1.0 / acceptance_rate - 1.0) * 100:.1f}%.",
+        )
+
+        # When in case of leakage a batch size was used there could be too many samples.
+        samples = torch.cat(accepted)[:num_samples]
+        assert (
+            samples.shape[0] == num_samples
+        ), "Number of accepted samples must match required samples."
+
+        return samples
+
+    def log_prob(self, theta: Tensor) -> Tensor:
+        r"""
+        Return whether the parameter lies outside or inside of the support.
+
+        Args:
+            theta: Parameters whose label to predict.
+
+        Returns:
+            Integers that indicate whether the parameter set is outside (=0) or inside
+            (=1).
+        """
+
+        log_probs = self._posterior.log_prob(theta)
+        predictions = log_probs > self._thr
+        return predictions.int()
+
+
+def identify_cutoff(
+    posterior,
+    num_samples_to_estimate: int = 10_000,
+    quantile: float = 0.0,
+    log_prob_offset: float = 0.0,
+) -> Tensor:
+    """
+    Returns the log-probability at which to threshold the posterior.
+
+    Args:
+        num_samples_to_estimate: Number of posterior samples used to estimate the
+            threshold.
+        quantile: Of the `num_samples_to_estimate`, we take the log-probablity of
+            the `quantile` lowest one as the threshold.
+
+    Returns:
+        Tensor: The threshold.
+    """
+    posterior.net.eval()
+    samples = posterior.sample((num_samples_to_estimate,))
+    sample_probs = posterior.log_prob(samples)
+    sorted_probs, _ = torch.sort(sample_probs)
+    return sorted_probs[int(quantile * num_samples_to_estimate)] + log_prob_offset
