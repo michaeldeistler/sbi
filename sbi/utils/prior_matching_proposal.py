@@ -7,6 +7,7 @@ from torch.nn.utils import clip_grad_norm_
 from copy import deepcopy
 from sbi.types import Shape
 from tqdm.auto import tqdm
+from sbi.utils import BoxUniform
 
 
 class PriorMatchingProposal(nn.Module):
@@ -26,6 +27,8 @@ class PriorMatchingProposal(nn.Module):
         else:
             self._build_neural_net = density_estimator
 
+        assert isinstance(prior, BoxUniform)
+
         self._dim_theta = int(prior.sample((1,)).shape[1])
         self._neural_net = self._build_neural_net(self._dim_theta)
         self._posterior = deepcopy(posterior)
@@ -34,6 +37,11 @@ class PriorMatchingProposal(nn.Module):
         self._thr = identify_cutoff(
             posterior, num_samples_to_estimate, quantile, log_prob_offset
         )
+        self._zscore_net = self._posterior.net._transform._transforms[0]
+        self._zscore_logabsdet = self.self._zscore_net.inverse(
+            zeros(1, self._dim_theta)
+        )
+        self._zscore_x_net = self._posterior.net._embedding_net
 
     def sample(self, sample_shape: Shape = torch.Size()) -> Tensor:
         """
@@ -46,6 +54,7 @@ class PriorMatchingProposal(nn.Module):
             Tensor: Samples.
         """
         xos = self._posterior.default_x.repeat(sample_shape[0], 1)
+        xos = self._zscore_x_net(xos)
 
         with torch.no_grad():
             self._posterior.net.eval()
@@ -55,7 +64,8 @@ class PriorMatchingProposal(nn.Module):
             prior_matching_samples, _ = self._posterior.net._transform.inverse(
                 base_samples, context=xos
             )
-            return prior_matching_samples
+            unnorm_samples = self._zscore_net.inverse(prior_matching_samples)
+            return unnorm_samples
 
     def log_prob(self, theta: Tensor) -> Tensor:
         """
@@ -68,14 +78,16 @@ class PriorMatchingProposal(nn.Module):
             Tensor: Log-probability of the prior matching proposal.
         """
         xos = self._posterior.default_x.repeat(theta.shape[0], 1)
+        xos = self._zscore_x_net(xos)
 
         with torch.no_grad():
             self._posterior.net.eval()
             self._neural_net.train()
 
-            noise, logabsdet = self._posterior.net._transform(theta, context=xos)
+            z_theta, z_score_lobabsdet = self._zscore_net(theta)
+            noise, logabsdet = self._posterior.net._transform(z_theta, context=xos)
             vi_log_prob = self._neural_net.log_prob(noise)
-            return vi_log_prob + logabsdet
+            return vi_log_prob + logabsdet + z_score_lobabsdet
 
     def train(
         self,
@@ -99,7 +111,8 @@ class PriorMatchingProposal(nn.Module):
             Density estimator that approximates the distribution $p(\theta|x)$.
         """
 
-        self._xos = self._posterior.default_x.repeat(num_elbo_particles, 1)
+        xos = self._posterior.default_x.repeat(num_elbo_particles, 1)
+        self._xos = self._zscore_x_net(xos)
 
         self.optimizer = optim.Adam(
             list(self._neural_net.parameters()),
@@ -139,11 +152,15 @@ class PriorMatchingProposal(nn.Module):
             variational_samples, context=self._xos
         )
         sample_logprob = (
-            self._posterior.net._distribution.log_prob(variational_samples) - logabsdet
+            self._posterior.net._distribution.log_prob(variational_samples)
+            - logabsdet
+            + self._standardization_logabsdet
         )
         below_thr = sample_logprob < self._thr
-        target_density = logabsdet + self._prior.log_prob(variational_samples)
+        target_density = logabsdet  # + self._prior.log_prob(variational_samples)
         target_density[below_thr] = sample_logprob[below_thr]
+        # print("Below thr target", target_density[below_thr])
+        # print("Above thr target", target_density[~below_thr])
         return target_density
 
     def _elbo(self, num_elbo_particles: int) -> Tensor:
@@ -293,5 +310,7 @@ def identify_cutoff(
     posterior.net.eval()
     samples = posterior.sample((num_samples_to_estimate,))
     sample_probs = posterior.log_prob(samples)
+    # _, logabsdets = posterior.net._transform._transforms[0](samples)
+    # sample_probs += logabsdets
     sorted_probs, _ = torch.sort(sample_probs)
     return sorted_probs[int(quantile * num_samples_to_estimate)] + log_prob_offset
