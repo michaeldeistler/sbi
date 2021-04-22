@@ -38,7 +38,7 @@ class PriorMatchingProposal(nn.Module):
             posterior, num_samples_to_estimate, quantile, log_prob_offset
         )
         self._zscore_net = self._posterior.net._transform._transforms[0]
-        self._zscore_logabsdet = self.self._zscore_net.inverse(
+        _, self._zscore_logabsdet = self._zscore_net.inverse(
             zeros(1, self._dim_theta)
         )
         self._zscore_x_net = self._posterior.net._embedding_net
@@ -64,8 +64,8 @@ class PriorMatchingProposal(nn.Module):
             prior_matching_samples, _ = self._posterior.net._transform.inverse(
                 base_samples, context=xos
             )
-            unnorm_samples = self._zscore_net.inverse(prior_matching_samples)
-            return unnorm_samples
+            # unnorm_samples, _ = self._zscore_net.inverse(prior_matching_samples)
+            return prior_matching_samples
 
     def log_prob(self, theta: Tensor) -> Tensor:
         """
@@ -84,10 +84,10 @@ class PriorMatchingProposal(nn.Module):
             self._posterior.net.eval()
             self._neural_net.train()
 
-            z_theta, z_score_lobabsdet = self._zscore_net(theta)
-            noise, logabsdet = self._posterior.net._transform(z_theta, context=xos)
+            # z_theta, z_score_lobabsdet = self._zscore_net(theta)
+            noise, logabsdet = self._posterior.net._transform(theta, context=xos)
             vi_log_prob = self._neural_net.log_prob(noise)
-            return vi_log_prob + logabsdet + z_score_lobabsdet
+            return vi_log_prob + logabsdet
 
     def train(
         self,
@@ -148,19 +148,15 @@ class PriorMatchingProposal(nn.Module):
             Tensor: The pdf.
         """
 
-        _, logabsdet = self._posterior.net._transform.inverse(
+        data_, logabsdet = self._posterior.net._transform.inverse(
             variational_samples, context=self._xos
         )
-        sample_logprob = (
-            self._posterior.net._distribution.log_prob(variational_samples)
-            - logabsdet
-            + self._standardization_logabsdet
-        )
+        sample_logprob = self._posterior.log_prob(data_)
         below_thr = sample_logprob < self._thr
         target_density = logabsdet  # + self._prior.log_prob(variational_samples)
         target_density[below_thr] = sample_logprob[below_thr]
-        # print("Below thr target", target_density[below_thr])
-        # print("Above thr target", target_density[~below_thr])
+        print("Below thr target", target_density[below_thr][:5])
+        print("Above thr target", target_density[~below_thr][:5])
         return target_density
 
     def _elbo(self, num_elbo_particles: int) -> Tensor:
