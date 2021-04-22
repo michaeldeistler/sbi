@@ -64,7 +64,6 @@ class PriorMatchingProposal(nn.Module):
             prior_matching_samples, _ = self._posterior.net._transform.inverse(
                 base_samples, context=xos
             )
-            # unnorm_samples, _ = self._zscore_net.inverse(prior_matching_samples)
             return prior_matching_samples
 
     def log_prob(self, theta: Tensor) -> Tensor:
@@ -84,7 +83,6 @@ class PriorMatchingProposal(nn.Module):
             self._posterior.net.eval()
             self._neural_net.train()
 
-            # z_theta, z_score_lobabsdet = self._zscore_net(theta)
             noise, logabsdet = self._posterior.net._transform(theta, context=xos)
             vi_log_prob = self._neural_net.log_prob(noise)
             return vi_log_prob + logabsdet
@@ -155,8 +153,6 @@ class PriorMatchingProposal(nn.Module):
         below_thr = sample_logprob < self._thr
         target_density = logabsdet  # + self._prior.log_prob(variational_samples)
         target_density[below_thr] = sample_logprob[below_thr]
-        print("Below thr target", target_density[below_thr][:5])
-        print("Above thr target", target_density[~below_thr][:5])
         return target_density
 
     def _elbo(self, num_elbo_particles: int) -> Tensor:
@@ -306,7 +302,5 @@ def identify_cutoff(
     posterior.net.eval()
     samples = posterior.sample((num_samples_to_estimate,))
     sample_probs = posterior.log_prob(samples)
-    # _, logabsdets = posterior.net._transform._transforms[0](samples)
-    # sample_probs += logabsdets
     sorted_probs, _ = torch.sort(sample_probs)
     return sorted_probs[int(quantile * num_samples_to_estimate)] + log_prob_offset
