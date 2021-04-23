@@ -161,6 +161,7 @@ def posterior_nn(
     num_transforms: int = 5,
     num_bins: int = 10,
     embedding_net: nn.Module = nn.Identity(),
+    base_dist: str = "normal",
     num_components: int = 10,
 ) -> Callable:
     r"""
@@ -218,9 +219,9 @@ def posterior_nn(
         if model == "made":
             return build_made(batch_x=batch_theta, batch_y=batch_x, **kwargs)
         if model == "maf":
-            return build_maf(batch_x=batch_theta, batch_y=batch_x, **kwargs)
+            return build_maf(batch_x=batch_theta, batch_y=batch_x, base_dist=base_dist, **kwargs)
         elif model == "nsf":
-            return build_nsf(batch_x=batch_theta, batch_y=batch_x, **kwargs)
+            return build_nsf(batch_x=batch_theta, batch_y=batch_x, base_dist=base_dist, **kwargs)
         else:
             raise NotImplementedError
 
@@ -234,6 +235,7 @@ def vi_nn(
     hidden_features: int = 50,
     num_transforms: int = 5,
     num_bins: int = 10,
+    base_dist: str = "normal",
     embedding_net: nn.Module = nn.Identity(),
 ) -> Callable:
     r"""
@@ -255,6 +257,7 @@ def vi_nn(
             `nsf`). Ignored if density estimator is a `mdn` or `made`.
         num_bins: Number of bins used for the splines in `nsf`. Ignored if density
             estimator not `nsf`.
+        base_dist: Which base distribution to use.
         embedding_net: Optional embedding network for simulation outputs $x$. This
             embedding net allows to learn features from potentially high-dimensional
             simulation outputs.
@@ -277,7 +280,7 @@ def vi_nn(
 
     def build_fn(dim_theta):
         if model == "nsf":
-            return build_unconditional_nsf(x_numel=dim_theta, **kwargs)
+            return build_unconditional_nsf(x_numel=dim_theta, base_dist=base_dist, **kwargs)
         else:
             raise NotImplementedError
 

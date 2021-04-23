@@ -499,8 +499,6 @@ class DirectPosterior(NeuralPosterior):
 
 
 
-
-
 class PotentialFunctionProvider:
     """
     This class is initialized without arguments during the initialization of the

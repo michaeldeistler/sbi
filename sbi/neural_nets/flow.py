@@ -7,10 +7,10 @@ from warnings import warn
 from pyknos.nflows import distributions as distributions_
 from pyknos.nflows import flows, transforms
 from pyknos.nflows.nn import nets
-from torch import Tensor, nn, relu, tanh, tensor, uint8
+from torch import Tensor, nn, relu, tanh, tensor, uint8, ones
 
 from sbi.utils.sbiutils import standardizing_net, standardizing_transform
-from sbi.utils.torchutils import create_alternating_binary_mask
+from sbi.utils.torchutils import BoxUniform, create_alternating_binary_mask
 
 
 def build_made(
@@ -81,6 +81,7 @@ def build_maf(
     z_score_y: bool = True,
     hidden_features: int = 50,
     num_transforms: int = 5,
+    base_dist: str = "normal",
     embedding_net: nn.Module = nn.Identity(),
     **kwargs,
 ) -> nn.Module:
@@ -136,7 +137,10 @@ def build_maf(
     if z_score_y:
         embedding_net = nn.Sequential(standardizing_net(batch_y), embedding_net)
 
-    distribution = distributions_.StandardNormal((x_numel,))
+    if base_dist == "normal":
+        distribution = distributions_.StandardNormal((x_numel,))
+    else:
+        raise NotImplementedError
     neural_net = flows.Flow(transform, distribution, embedding_net)
 
     return neural_net
@@ -150,6 +154,7 @@ def build_nsf(
     hidden_features: int = 50,
     num_transforms: int = 5,
     num_bins: int = 10,
+    base_dist: str = "normal",
     embedding_net: nn.Module = nn.Identity(),
     **kwargs,
 ) -> nn.Module:
@@ -289,7 +294,14 @@ def build_nsf(
     if z_score_y:
         embedding_net = nn.Sequential(standardizing_net(batch_y), embedding_net)
 
-    distribution = distributions_.StandardNormal((x_numel,))
+    if base_dist == "normal":
+        distribution = distributions_.StandardNormal((x_numel,))
+    elif base_dist == "uniform":
+        distribution = Uniform(-3*ones(x_numel), 3*ones(x_numel))
+    elif base_dist == "truncated_normal":
+        distribution = TruncatedNormal(x_numel)
+    else:
+        raise NotImplementedError
     neural_net = flows.Flow(transform, distribution, embedding_net)
 
     return neural_net
@@ -297,6 +309,7 @@ def build_nsf(
 
 def build_unconditional_nsf(
     x_numel: int,
+    base_dist: str = "normal",
     hidden_features: int = 50,
     num_transforms: int = 5,
     num_bins: int = 10,
@@ -420,7 +433,40 @@ def build_unconditional_nsf(
         ]
     )
 
-    distribution = distributions_.StandardNormal((x_numel,))
+    if base_dist == "normal":
+        distribution = distributions_.StandardNormal((x_numel,))
+    elif base_dist == "uniform":
+        distribution = Uniform(-3*ones(x_numel), 3*ones(x_numel))
+    else:
+        raise NotImplementedError
     neural_net = flows.Flow(transform, distribution)
 
     return neural_net
+
+
+class Uniform():
+    """
+    Wrapper around BoxUniform that does not pass on the context.
+
+    Also, it makes the integer a tuple for sample().
+    """
+    def __init__(self, lower, upper) -> None:
+        self._dist = BoxUniform(lower, upper)
+
+    def sample(self, num_samples, **kwargs):
+        return self._dist.sample((num_samples, )).unsqueeze(0)
+
+    def log_prob(self, theta, **kwargs):
+        return self._dist.log_prob(theta)
+
+
+class TruncatedNormal():
+    def __init__(self, dim: int) -> None:
+        self._dist = distributions_.StandardNormal((dim,))
+        self._support = BoxUniform(-ones(dim,), ones(dim,))
+
+    def sample(self, num_samples, **kwargs):
+        return self._dist.sample((num_samples, )).unsqueeze(0)
+
+    def log_prob(self, theta, **kwargs):
+        return self._dist.log_prob(theta)

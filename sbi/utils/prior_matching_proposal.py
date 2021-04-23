@@ -1,3 +1,4 @@
+import warnings
 import torch
 from torch import nn, Tensor, zeros, ones
 import sbi.utils as utils
@@ -151,8 +152,12 @@ class PriorMatchingProposal(nn.Module):
         )
         sample_logprob = self._posterior.log_prob(data_)
         below_thr = sample_logprob < self._thr
-        target_density = logabsdet  # + self._prior.log_prob(variational_samples)
-        target_density[below_thr] = sample_logprob[below_thr]
+        target_density = logabsdet  # + self._prior.log_prob(data_)
+        dist_vals = self._posterior.net._distribution.log_prob(variational_samples)
+        if torch.any(below_thr):
+            if torch.max(dist_vals[below_thr]) > torch.min(target_density[~below_thr]):
+                warnings.warn("Gaussian has too high values.")
+        target_density[below_thr] = dist_vals[below_thr]
         return target_density
 
     def _elbo(self, num_elbo_particles: int) -> Tensor:
