@@ -188,6 +188,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
                 theta[self.train_indices], x[self.train_indices], z[self.train_indices]
             )
             self._x_shape = x_shape_from_simulation(x)
+            self._theta_dim = theta.shape[1]
             assert (
                 len(self._x_shape) < 3
             ), "SNLE cannot handle multi-dimensional simulator output."
@@ -333,6 +334,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
             prior=self._prior,
             prior_z=self._prior_z,
             x_shape=self._x_shape,
+            theta_dim=self._theta_dim,
             sample_with=sample_with,
             mcmc_method=mcmc_method,
             mcmc_parameters=mcmc_parameters,

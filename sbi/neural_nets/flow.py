@@ -394,7 +394,10 @@ def build_latent_nsf(
 
         mask_in_layer = lambda i: tensor([1], dtype=uint8)
         conditioner = lambda in_features, out_features: ContextSplineMap(
-            in_features, out_features, hidden_features, context_features=y_numel
+            in_features,
+            out_features,
+            hidden_features,
+            context_features=y_numel + z_numel,
         )
         if num_transforms > 1:
             warn(
@@ -457,6 +460,7 @@ def build_latent_nsf(
             y_dim: int,
             z_dim: int,
         ):
+            super().__init__()
             self.net_y = embedding_net_y
             self.net_z = embedding_net_z
             self.y_dim = y_dim

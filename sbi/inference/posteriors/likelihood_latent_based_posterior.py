@@ -58,7 +58,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         prior,
         prior_z,
         x_shape: torch.Size,
-        theta_shape: torch.Size,
+        theta_dim: torch.Size,
         sample_with: str = "mcmc",
         mcmc_method: str = "slice_np",
         mcmc_parameters: Optional[Dict[str, Any]] = None,
@@ -102,10 +102,12 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
             device: Training device, e.g., cpu or cuda:0.
         """
 
-        kwargs = del_entries(locals(), entries=("self", "__class__"))
+        kwargs = del_entries(
+            locals(), entries=("self", "__class__", "prior_z", "theta_dim")
+        )
         super().__init__(**kwargs)
 
-        self._theta_dim = theta_shape.numel()
+        self._theta_dim = theta_dim
         self._prior_z = prior_z
         self._prior_psi = PsiPrior(self._prior_z)
 
@@ -300,12 +302,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         return samples
 
     def sample_z_given_psi(self, psi: Tensor):
-        z_samples = self._prior_z.sample(
-            (
-                psi.shape[0],
-                self.num_monte_carlo,
-            )
-        )
+        z_samples = self._prior_z.sample((psi.shape[0], 1_000))
         means = torch.mean(z_samples, dim=2)
         dist_from_mean_to_psi = torch.abs(psi - means)
         accepted = []
@@ -577,7 +574,7 @@ class PotentialFunctionProvider:
         return log_likelihoods
 
     def posterior_potential(
-        self, theta_z: np.array, track_gradients: bool = False
+        self, theta_psi: np.array, track_gradients: bool = False
     ) -> ScalarFloat:
         r"""Return posterior log prob. of theta $p(\theta|x)$"
 
@@ -587,14 +584,14 @@ class PotentialFunctionProvider:
         Returns:
             Posterior log probability of the theta, $-\infty$ if impossible under prior.
         """
-        theta = torch.as_tensor(theta_z[: self.theta_dim], dtype=torch.float32)
-        z = torch.as_tensor(theta_z[self.theta_dim :], dtype=torch.float32)
-        psi = self.likelihood_nn.embedding_net.net_z(z)
-        theta_z = torch.as_tensor(theta_z, dtype=torch.float32)
+        theta_psi = torch.as_tensor(theta_psi, dtype=torch.float32)
+        theta_psi = atleast_2d(theta_psi)
+        theta = torch.as_tensor(theta_psi[:, : self.theta_dim], dtype=torch.float32)
+        psi = torch.as_tensor(theta_psi[:, self.theta_dim :], dtype=torch.float32)
 
         # Notice opposite sign to pyro potential.
         return (
-            self.log_likelihood(theta_z, track_gradients=track_gradients).cpu()
+            self.log_likelihood(theta_psi, track_gradients=track_gradients).cpu()
             + self.prior.log_prob(theta)
             + self.prior_psi.log_prob(psi)
         )
