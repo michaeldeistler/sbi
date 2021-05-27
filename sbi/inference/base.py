@@ -245,6 +245,9 @@ class NeuralInference(ABC):
         x = get_simulations_since_round(
             self._x_roundwise, self._data_round_index, starting_round
         )
+        z = get_simulations_since_round(
+            self._z_roundwise, self._data_round_index, starting_round
+        )
         prior_masks = get_simulations_since_round(
             self._prior_masks, self._data_round_index, starting_round
         )
@@ -259,7 +262,7 @@ class NeuralInference(ABC):
                 num_nans, num_infs, exclude_invalid_x, type(self).__name__, self._round
             )
 
-        return theta[is_valid_x], x[is_valid_x], prior_masks[is_valid_x]
+        return theta[is_valid_x], x[is_valid_x], z[is_valid_x], prior_masks[is_valid_x]
 
     @abstractmethod
     def train(

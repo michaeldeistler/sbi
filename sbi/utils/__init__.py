@@ -3,7 +3,12 @@ from sbi.utils.conditional_density import (
     conditional_corrcoeff,
     eval_conditional_density,
 )
-from sbi.utils.get_nn_models import classifier_nn, likelihood_nn, posterior_nn
+from sbi.utils.get_nn_models import (
+    classifier_nn,
+    likelihood_nn,
+    posterior_nn,
+    likelihood_latent_nn,
+)
 from sbi.utils.io import get_data_root, get_log_root, get_project_root
 from sbi.utils.plot import conditional_pairplot, pairplot
 from sbi.utils.restriction_estimator import RestrictedPrior, RestrictionEstimator
