@@ -108,8 +108,10 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         super().__init__(**kwargs)
 
         self._theta_dim = theta_dim
+        self._prior_theta = prior
         self._prior_z = prior_z
         self._prior_psi = PsiPrior(self._prior_z)
+        self._prior = MultipleIndependent([self._prior_theta, self._prior_psi])
 
         self._purpose = (
             "It provides MCMC to .sample() from the posterior and "
@@ -215,6 +217,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         theta = theta_psi[:, : self._theta_dim]
         psi = theta_psi[:, self._theta_dim :]
+        print("psi", psi.shape)
         z = self.sample_z_given_psi(psi)
         samples = torch.cat([theta, z], dim=1)
 
@@ -249,7 +252,6 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                 num_samples=num_samples,
                 potential_fn=potential_fn_provider(
                     self._prior,
-                    self._prior_psi,
                     self.net,
                     x,
                     mcmc_method,
@@ -259,7 +261,6 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                     self._prior,
                     potential_fn_provider(
                         self._prior,
-                        self._prior_psi,
                         self.net,
                         x,
                         "slice_np",
@@ -278,14 +279,11 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                 )
             )
             if "proposal" not in rejection_sampling_parameters:
-                # TODO: use MultipleIndependent throughout the entire file.
-                prior = MultipleIndependent([self._prior, self._prior_psi])
-                rejection_sampling_parameters["proposal"] = prior
+                rejection_sampling_parameters["proposal"] = self._prior
 
             samples, _ = rejection_sample(
                 potential_fn=potential_fn_provider(
                     self._prior,
-                    self._prior_psi,
                     self.net,
                     x,
                     "rejection",
@@ -523,7 +521,6 @@ class PotentialFunctionProvider:
     def __call__(
         self,
         prior,
-        prior_psi,
         likelihood_nn: nn.Module,
         x: Tensor,
         method: str,
@@ -545,7 +542,6 @@ class PotentialFunctionProvider:
         """
         self.likelihood_nn = likelihood_nn
         self.prior = prior
-        self.prior_psi = prior_psi
         self.device = next(likelihood_nn.parameters()).device
         self.x = atleast_2d(x).to(self.device)
         self.theta_dim = theta_dim
@@ -586,15 +582,11 @@ class PotentialFunctionProvider:
         """
         theta_psi = torch.as_tensor(theta_psi, dtype=torch.float32)
         theta_psi = atleast_2d(theta_psi)
-        theta = torch.as_tensor(theta_psi[:, : self.theta_dim], dtype=torch.float32)
-        psi = torch.as_tensor(theta_psi[:, self.theta_dim :], dtype=torch.float32)
 
         # Notice opposite sign to pyro potential.
-        return (
-            self.log_likelihood(theta_psi, track_gradients=track_gradients).cpu()
-            + self.prior.log_prob(theta)
-            + self.prior_psi.log_prob(psi)
-        )
+        return self.log_likelihood(
+            theta_psi, track_gradients=track_gradients
+        ).cpu() + self.prior.log_prob(theta_psi)
 
     def pyro_potential(
         self, theta: Dict[str, Tensor], track_gradients: bool = False
