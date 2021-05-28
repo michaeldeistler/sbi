@@ -54,7 +54,6 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
 
         super().__init__(
             prior=prior,
-            prior_z=prior_z,
             device=device,
             logging_level=logging_level,
             summary_writer=summary_writer,

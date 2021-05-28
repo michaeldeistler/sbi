@@ -21,24 +21,25 @@ from sbi.utils.torchutils import ScalarFloat, atleast_2d, ensure_theta_batched
 
 
 class PsiPrior(torch.distributions.MultivariateNormal):
-    def __init__(self, z_dist, num_monte_carlo: int = 10_000):
-        dim = z_dist.sample((1,)).shape[1]
+    def __init__(self, prior_z, embedding_net_z, num_monte_carlo: int = 10_000):
+        dim = prior_z.sample((1,)).shape[1]
         super().__init__(torch.zeros(dim), torch.eye(dim))
-        self.z_dist = z_dist
+        self.prior_z = prior_z
+        self.embedding_net_z = embedding_net_z
         self.num_monte_carlo = num_monte_carlo
-        z_samples = self.z_dist.sample((self.num_monte_carlo,))
-        self.mean_values = torch.mean(z_samples, axis=1)
+        z_samples = self.prior_z.sample((self.num_monte_carlo,))
+        self.psi_bank = self.embedding_net_z(z_samples)
         self.epsilon = 0.01
 
     def sample(self, sample_shape=(1,)):
-        z_samples = self.z_dist.sample(sample_shape)
-        mean_val = torch.mean(z_samples, axis=1).unsqueeze(1)
-        return mean_val
+        z_samples = self.prior_z.sample(sample_shape)
+        psi = self.embedding_net_z(z_samples)
+        return psi
 
     def log_prob(self, psi):
-        dist = torch.abs(psi - self.mean_values)
+        dist = torch.abs(psi - self.psi_bank[:, 0])
         accepted = dist < self.epsilon
-        return torch.sum(accepted, axis=1) / self.num_monte_carlo
+        return torch.log(torch.sum(accepted, axis=1) / self.num_monte_carlo)
 
 
 class LikelihoodLatentBasedPosterior(NeuralPosterior):
@@ -110,8 +111,13 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         self._theta_dim = theta_dim
         self._prior_theta = prior
         self._prior_z = prior_z
-        self._prior_psi = PsiPrior(self._prior_z)
-        self._prior = MultipleIndependent([self._prior_theta, self._prior_psi])
+        warn("We have to update the embedding net before sampling the potential")
+        self._prior_psi = PsiPrior(
+            prior_z=self._prior_z, embedding_net_z=neural_net._embedding_net.net_z
+        )
+        self._prior = MultipleIndependent(
+            [self._prior_theta, self._prior_psi], validate_args=False
+        )
 
         self._purpose = (
             "It provides MCMC to .sample() from the posterior and "

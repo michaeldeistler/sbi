@@ -296,6 +296,86 @@ def build_nsf(
     return neural_net
 
 
+def build_latent_maf(
+    batch_x: Tensor = None,
+    batch_y: Tensor = None,
+    batch_z: Tensor = None,
+    z_score_x: bool = True,
+    z_score_y: bool = True,
+    z_score_z: bool = True,
+    hidden_features: int = 50,
+    num_transforms: int = 5,
+    embedding_net_y: nn.Module = nn.Identity(),
+    embedding_net_z: nn.Module = nn.Identity(),
+    **kwargs,
+) -> nn.Module:
+    """Builds MAF p(x|y).
+
+    Args:
+        batch_x: Batch of xs, used to infer dimensionality and (optional) z-scoring.
+        batch_y: Batch of ys, used to infer dimensionality and (optional) z-scoring.
+        z_score_x: Whether to z-score xs passing into the network.
+        z_score_y: Whether to z-score ys passing into the network.
+        hidden_features: Number of hidden features.
+        num_transforms: Number of transforms.
+        embedding_net: Optional embedding network for y.
+        kwargs: Additional arguments that are passed by the build function but are not
+            relevant for maf and are therefore ignored.
+
+    Returns:
+        Neural network.
+    """
+    x_numel = batch_x[0].numel()
+    # Infer the output dimensionality of the embedding_net by making a forward pass.
+    y_numel = embedding_net_y(batch_y[:1]).numel()
+    z_numel = embedding_net_z(batch_z[:1]).numel()
+
+    if x_numel == 1:
+        warn(f"In one-dimensional output space, this flow is limited to Gaussians")
+
+    transform = transforms.CompositeTransform(
+        [
+            transforms.CompositeTransform(
+                [
+                    transforms.MaskedAffineAutoregressiveTransform(
+                        features=x_numel,
+                        hidden_features=hidden_features,
+                        context_features=y_numel+z_numel,
+                        num_blocks=2,
+                        use_residual_blocks=False,
+                        random_mask=False,
+                        activation=tanh,
+                        dropout_probability=0.0,
+                        use_batch_norm=True,
+                    ),
+                    transforms.RandomPermutation(features=x_numel),
+                ]
+            )
+            for _ in range(num_transforms)
+        ]
+    )
+
+    if z_score_x:
+        transform_zx = standardizing_transform(batch_x)
+        transform = transforms.CompositeTransform([transform_zx, transform])
+
+    if z_score_y:
+        embedding_net_y = nn.Sequential(standardizing_net(batch_y), embedding_net_y)
+    if z_score_z:
+        embedding_net_z = nn.Sequential(standardizing_net(batch_z), embedding_net_z)
+
+    embedding_net = MergeNet(
+        embedding_net_y=embedding_net_y,
+        embedding_net_z=embedding_net_z,
+        y_dim=batch_y.shape[1],
+        z_dim=batch_z.shape[1],
+    )
+
+    distribution = distributions_.StandardNormal((x_numel,))
+    neural_net = flows.Flow(transform, distribution, embedding_net)
+
+    return neural_net
+
 def build_latent_nsf(
     batch_x: Tensor = None,
     batch_y: Tensor = None,
@@ -452,7 +532,19 @@ def build_latent_nsf(
     if z_score_z:
         embedding_net_z = nn.Sequential(standardizing_net(batch_z), embedding_net_z)
 
-    class MergeNet(nn.Module):
+    embedding_net = MergeNet(
+        embedding_net_y=embedding_net_y,
+        embedding_net_z=embedding_net_z,
+        y_dim=batch_y.shape[1],
+        z_dim=batch_z.shape[1],
+    )
+
+    distribution = distributions_.StandardNormal((x_numel,))
+    neural_net = flows.Flow(transform, distribution, embedding_net)
+
+    return neural_net
+
+class MergeNet(nn.Module):
         def __init__(
             self,
             embedding_net_y: nn.Module,
@@ -473,15 +565,3 @@ def build_latent_nsf(
             embedded_z = self.net_z(z)
             embedded_yz = torch.cat([embedded_y, embedded_z], dim=1)
             return embedded_yz
-
-    embedding_net = MergeNet(
-        embedding_net_y=embedding_net_y,
-        embedding_net_z=embedding_net_z,
-        y_dim=batch_y.shape[1],
-        z_dim=batch_z.shape[1],
-    )
-
-    distribution = distributions_.StandardNormal((x_numel,))
-    neural_net = flows.Flow(transform, distribution, embedding_net)
-
-    return neural_net

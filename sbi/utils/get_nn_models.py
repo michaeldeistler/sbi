@@ -11,7 +11,7 @@ from sbi.neural_nets.classifier import (
     build_mlp_classifier,
     build_resnet_classifier,
 )
-from sbi.neural_nets.flow import build_made, build_maf, build_nsf, build_latent_nsf
+from sbi.neural_nets.flow import build_made, build_maf, build_nsf, build_latent_maf, build_latent_nsf
 from sbi.neural_nets.mdn import build_mdn
 
 
@@ -227,8 +227,9 @@ def likelihood_latent_nn(
             raise NotImplementedError
             return build_made(batch_x=batch_x, batch_y=batch_theta, **kwargs)
         if model == "maf":
-            raise NotImplementedError
-            return build_maf(batch_x=batch_x, batch_y=batch_theta, **kwargs)
+            return build_latent_maf(
+                batch_x=batch_x, batch_y=batch_theta, batch_z=batch_z, **kwargs
+            )
         elif model == "nsf":
             return build_latent_nsf(
                 batch_x=batch_x, batch_y=batch_theta, batch_z=batch_z, **kwargs

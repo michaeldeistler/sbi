@@ -14,6 +14,7 @@ class RSNLE_A(LikelihoodLatentEstimator):
     def __init__(
         self,
         prior,
+        prior_z,
         density_estimator: Union[str, Callable] = "nsf",
         device: str = "cpu",
         logging_level: Union[int, str] = "WARNING",
