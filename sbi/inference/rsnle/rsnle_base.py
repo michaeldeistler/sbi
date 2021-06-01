@@ -5,6 +5,7 @@
 from abc import ABC
 from copy import deepcopy
 from typing import Any, Callable, Dict, Optional, Union
+from warnings import warn
 
 import torch
 from torch import Tensor, optim, nn
@@ -344,7 +345,8 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
         self._posterior._num_trained_rounds = self._round + 1
 
         # Store models at end of each round.
-        self._model_bank.append(deepcopy(self._posterior))
-        self._model_bank[-1].net.eval()
+        # self._model_bank.append(deepcopy(self._posterior))
+        # self._model_bank[-1].net.eval()
 
-        return deepcopy(self._posterior)
+        warn("Posterior did not get deepcopied also above for model bank")
+        return self._posterior

@@ -21,15 +21,50 @@ from sbi.utils.torchutils import ScalarFloat, atleast_2d, ensure_theta_batched
 
 
 class PsiPrior(torch.distributions.MultivariateNormal):
-    def __init__(self, prior_z, embedding_net_z, num_monte_carlo: int = 10_000):
+    def __init__(
+        self,
+        prior_z,
+        embedding_net_z,
+    ):
         dim = prior_z.sample((1,)).shape[1]
         super().__init__(torch.zeros(dim), torch.eye(dim))
         self.prior_z = prior_z
         self.embedding_net_z = embedding_net_z
-        self.num_monte_carlo = num_monte_carlo
-        z_samples = self.prior_z.sample((self.num_monte_carlo,))
-        self.psi_bank = self.embedding_net_z(z_samples)
         self.epsilon = 0.01
+        self.kde = None
+
+    def build_kde(
+        self,
+        num_samples_per_iter: int = 100_000,
+        num_iter: int = 10,
+        num_bins: int = 100,
+    ):
+        all_psi = []
+        for _ in range(num_iter):
+            z_samples = self.prior_z.sample((num_samples_per_iter,))
+            psi_samples = self.embedding_net_z(z_samples)
+            all_psi.append(psi_samples)
+        all_psi = torch.cat(all_psi)
+
+        self.minimum, _ = torch.min(all_psi, dim=0)
+        self.maximum, _ = torch.max(all_psi, dim=0)
+        self.kde = torch.histc(
+            all_psi, bins=100, min=self.minimum.item(), max=self.maximum.item()
+        )
+
+    def eval_kde(self, psi: Tensor):
+        num_bins = self.kde.shape[0]
+        psi_minus_min = psi - self.minimum
+        fraction_within_range = psi_minus_min / (self.maximum - self.minimum)
+        selected_bins = fraction_within_range * num_bins
+        # remainder = (fraction_within_range * num_bins) - selected_bins
+        selected_bins[selected_bins < 0] = 0
+        selected_bins[selected_bins > num_bins - 1] = num_bins - 1
+        inds = torch.as_tensor(selected_bins, dtype=torch.long)
+        kde_values = self.kde[inds]
+        kde_values[psi < self.minimum] = 0.0
+        kde_values[psi > self.maximum] = 0.0
+        return kde_values / 1000.0
 
     def sample(self, sample_shape=(1,)):
         z_samples = self.prior_z.sample(sample_shape)
@@ -37,9 +72,10 @@ class PsiPrior(torch.distributions.MultivariateNormal):
         return psi
 
     def log_prob(self, psi):
-        dist = torch.abs(psi - self.psi_bank[:, 0])
-        accepted = dist < self.epsilon
-        return torch.log(torch.sum(accepted, axis=1) / self.num_monte_carlo)
+        if self.kde is None:
+            self.build_kde()
+
+        return torch.log(self.eval_kde(psi))
 
 
 class LikelihoodLatentBasedPosterior(NeuralPosterior):
@@ -111,9 +147,8 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         self._theta_dim = theta_dim
         self._prior_theta = prior
         self._prior_z = prior_z
-        warn("We have to update the embedding net before sampling the potential")
         self._prior_psi = PsiPrior(
-            prior_z=self._prior_z, embedding_net_z=neural_net._embedding_net.net_z
+            prior_z=self._prior_z, embedding_net_z=neural_net.net_z
         )
         self._prior = MultipleIndependent(
             [self._prior_theta, self._prior_psi], validate_args=False
@@ -223,7 +258,6 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         theta = theta_psi[:, : self._theta_dim]
         psi = theta_psi[:, self._theta_dim :]
-        print("psi", psi.shape)
         z = self.sample_z_given_psi(psi)
         samples = torch.cat([theta, z], dim=1)
 
@@ -244,6 +278,8 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         self.net.eval()
 
+        self._prior_psi.build_kde()
+
         sample_with = sample_with if sample_with is not None else self._sample_with
         x, num_samples = self._prepare_for_sample(x, sample_shape)
 
@@ -258,7 +294,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                 num_samples=num_samples,
                 potential_fn=potential_fn_provider(
                     self._prior,
-                    self.net,
+                    self.net.flow_given_theta_psi,
                     x,
                     mcmc_method,
                     self._theta_dim,
@@ -267,7 +303,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                     self._prior,
                     potential_fn_provider(
                         self._prior,
-                        self.net,
+                        self.net.flow_given_theta_psi,
                         x,
                         "slice_np",
                         self._theta_dim,
@@ -290,7 +326,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
             samples, _ = rejection_sample(
                 potential_fn=potential_fn_provider(
                     self._prior,
-                    self.net,
+                    self.net.flow_given_theta_psi,
                     x,
                     "rejection",
                     self._theta_dim,
@@ -496,7 +532,9 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         # Calculate likelihood in one batch.
         with torch.set_grad_enabled(track_gradients):
-            log_likelihood_trial_batch = net.log_prob(x_repeated, theta_repeated)
+            log_likelihood_trial_batch = net.log_prob(
+                x_repeated, context=theta_repeated
+            )
             # Reshape to (x-trials x parameters), sum over trial-log likelihoods.
             log_likelihood_trial_sum = log_likelihood_trial_batch.reshape(
                 x.shape[0], -1

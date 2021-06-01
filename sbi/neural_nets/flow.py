@@ -340,7 +340,7 @@ def build_latent_maf(
                     transforms.MaskedAffineAutoregressiveTransform(
                         features=x_numel,
                         hidden_features=hidden_features,
-                        context_features=y_numel+z_numel,
+                        context_features=y_numel + z_numel,
                         num_blocks=2,
                         use_residual_blocks=False,
                         random_mask=False,
@@ -376,6 +376,7 @@ def build_latent_maf(
 
     return neural_net
 
+
 def build_latent_nsf(
     batch_x: Tensor = None,
     batch_y: Tensor = None,
@@ -388,6 +389,7 @@ def build_latent_nsf(
     num_bins: int = 10,
     embedding_net_y: nn.Module = nn.Identity(),
     embedding_net_z: nn.Module = nn.Identity(),
+    embedding_net_y_psi: nn.Module = nn.Identity(),
     **kwargs,
 ) -> nn.Module:
     """Builds NSF p(x|y, z).
@@ -410,7 +412,7 @@ def build_latent_nsf(
     x_numel = batch_x[0].numel()
     # Infer the output dimensionality of the embedding_net by making a forward pass.
     y_numel = embedding_net_y(batch_y[:1]).numel()
-    z_numel = embedding_net_z(batch_z[:1]).numel()
+    psi_numel = embedding_net_z(batch_z[:1]).numel()
 
     if x_numel == 1:
 
@@ -477,7 +479,7 @@ def build_latent_nsf(
             in_features,
             out_features,
             hidden_features,
-            context_features=y_numel + z_numel,
+            context_features=y_numel + psi_numel,
         )
         if num_transforms > 1:
             warn(
@@ -497,7 +499,7 @@ def build_latent_nsf(
             in_features=in_features,
             out_features=out_features,
             hidden_features=hidden_features,
-            context_features=y_numel + z_numel,
+            context_features=y_numel + psi_numel,
             num_blocks=2,
             activation=relu,
             dropout_probability=0.0,
@@ -532,36 +534,48 @@ def build_latent_nsf(
     if z_score_z:
         embedding_net_z = nn.Sequential(standardizing_net(batch_z), embedding_net_z)
 
-    embedding_net = MergeNet(
-        embedding_net_y=embedding_net_y,
-        embedding_net_z=embedding_net_z,
-        y_dim=batch_y.shape[1],
-        z_dim=batch_z.shape[1],
-    )
+    y_psi = torch.cat(
+        [embedding_net_y(batch_y), embedding_net_z(batch_z)], dim=1
+    ).detach()
+    embedding_net_y_psi = nn.Sequential(standardizing_net(y_psi), embedding_net_y_psi)
 
     distribution = distributions_.StandardNormal((x_numel,))
-    neural_net = flows.Flow(transform, distribution, embedding_net)
+    neural_net = flows.Flow(transform, distribution, embedding_net_y_psi)
 
-    return neural_net
-
-class MergeNet(nn.Module):
-        def __init__(
-            self,
-            embedding_net_y: nn.Module,
-            embedding_net_z: nn.Module,
-            y_dim: int,
-            z_dim: int,
-        ):
+    class MergeNet(nn.Module):
+        def __init__(self, net, embedding_y, embedding_z, y_dim, z_dim):
             super().__init__()
-            self.net_y = embedding_net_y
-            self.net_z = embedding_net_z
+            self.flow_given_theta_psi = net
+            self.net_y = embedding_y
+            self.net_z = embedding_z
             self.y_dim = y_dim
             self.z_dim = z_dim
 
-        def forward(self, yz: Tensor):
-            y = yz[:, : self.y_dim]
-            z = yz[:, self.y_dim :]
+        def forward(self, context: Tensor):
+            y = context[:, : self.y_dim]
+            z = context[:, self.y_dim :]
             embedded_y = self.net_y(y)
             embedded_z = self.net_z(z)
             embedded_yz = torch.cat([embedded_y, embedded_z], dim=1)
             return embedded_yz
+
+        def log_prob(self, x: Tensor, context: Tensor):
+            embedded_yz = self.forward(context)
+            # print("x", x[:5])
+            # print("embedded_yz", torch.sum(embedded_yz[:5], dim=1))
+            # print("embedded_yz", embedded_yz)
+            return self.flow_given_theta_psi.log_prob(x, context=embedded_yz)
+
+        def sample(self, num_samples: int, context):
+            embedded_yz = self.forward(context)
+            return self.flow_given_theta_psi.sample(num_samples, context=embedded_yz)
+
+    wrapped_net = MergeNet(
+        net=neural_net,
+        embedding_y=embedding_net_y,
+        embedding_z=embedding_net_z,
+        y_dim=batch_y.shape[1],
+        z_dim=batch_z.shape[1],
+    )
+
+    return wrapped_net
