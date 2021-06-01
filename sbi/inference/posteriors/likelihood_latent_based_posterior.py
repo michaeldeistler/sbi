@@ -100,6 +100,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         self._prior_z = prior_z
         self._prior_psi = PsiPrior(
             prior_z=self._prior_z,
+            prior_theta=self._prior_theta,
             embedding_net_z=neural_net.net_z,
             eval_method=psi_prior_eval_method,
         )

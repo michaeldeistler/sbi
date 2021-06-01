@@ -423,7 +423,7 @@ def build_latent_nsf(
     x_numel = batch_x[0].numel()
     # Infer the output dimensionality of the embedding_net by making a forward pass.
     y_numel = embedding_net_y(batch_y[:1]).numel()
-    psi_numel = embedding_net_z(batch_z[:1]).numel()
+    psi_numel = embedding_net_z(batch_z[:1], batch_y[:1]).numel()
 
     if x_numel == 1:
 
