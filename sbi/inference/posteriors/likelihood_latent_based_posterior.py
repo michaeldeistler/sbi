@@ -18,64 +18,7 @@ from sbi.utils import (
     MultipleIndependent,
 )
 from sbi.utils.torchutils import ScalarFloat, atleast_2d, ensure_theta_batched
-
-
-class PsiPrior(torch.distributions.MultivariateNormal):
-    def __init__(
-        self,
-        prior_z,
-        embedding_net_z,
-    ):
-        dim = prior_z.sample((1,)).shape[1]
-        super().__init__(torch.zeros(dim), torch.eye(dim))
-        self.prior_z = prior_z
-        self.embedding_net_z = embedding_net_z
-        self.epsilon = 0.01
-        self.kde = None
-
-    def build_kde(
-        self,
-        num_samples_per_iter: int = 100_000,
-        num_iter: int = 10,
-        num_bins: int = 100,
-    ):
-        all_psi = []
-        for _ in range(num_iter):
-            z_samples = self.prior_z.sample((num_samples_per_iter,))
-            psi_samples = self.embedding_net_z(z_samples)
-            all_psi.append(psi_samples)
-        all_psi = torch.cat(all_psi)
-
-        self.minimum, _ = torch.min(all_psi, dim=0)
-        self.maximum, _ = torch.max(all_psi, dim=0)
-        self.kde = torch.histc(
-            all_psi, bins=100, min=self.minimum.item(), max=self.maximum.item()
-        )
-
-    def eval_kde(self, psi: Tensor):
-        num_bins = self.kde.shape[0]
-        psi_minus_min = psi - self.minimum
-        fraction_within_range = psi_minus_min / (self.maximum - self.minimum)
-        selected_bins = fraction_within_range * num_bins
-        # remainder = (fraction_within_range * num_bins) - selected_bins
-        selected_bins[selected_bins < 0] = 0
-        selected_bins[selected_bins > num_bins - 1] = num_bins - 1
-        inds = torch.as_tensor(selected_bins, dtype=torch.long)
-        kde_values = self.kde[inds]
-        kde_values[psi < self.minimum] = 0.0
-        kde_values[psi > self.maximum] = 0.0
-        return kde_values / 1000.0
-
-    def sample(self, sample_shape=(1,)):
-        z_samples = self.prior_z.sample(sample_shape)
-        psi = self.embedding_net_z(z_samples)
-        return psi
-
-    def log_prob(self, psi):
-        if self.kde is None:
-            self.build_kde()
-
-        return torch.log(self.eval_kde(psi))
+from sbi.utils.latent_sbi_utils import KDE, KDEInterpolate, PsiPrior
 
 
 class LikelihoodLatentBasedPosterior(NeuralPosterior):
@@ -100,6 +43,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         mcmc_method: str = "slice_np",
         mcmc_parameters: Optional[Dict[str, Any]] = None,
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
+        psi_prior_eval_method: str = "kde_interpolate",
         device: str = "cpu",
     ):
         """
@@ -140,7 +84,14 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         """
 
         kwargs = del_entries(
-            locals(), entries=("self", "__class__", "prior_z", "theta_dim")
+            locals(),
+            entries=(
+                "self",
+                "__class__",
+                "prior_z",
+                "theta_dim",
+                "psi_prior_eval_method",
+            ),
         )
         super().__init__(**kwargs)
 
@@ -148,7 +99,9 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         self._prior_theta = prior
         self._prior_z = prior_z
         self._prior_psi = PsiPrior(
-            prior_z=self._prior_z, embedding_net_z=neural_net.net_z
+            prior_z=self._prior_z,
+            embedding_net_z=neural_net.net_z,
+            eval_method=psi_prior_eval_method,
         )
         self._prior = MultipleIndependent(
             [self._prior_theta, self._prior_psi], validate_args=False
@@ -278,7 +231,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         self.net.eval()
 
-        self._prior_psi.build_kde()
+        self._prior_psi.evaluator.update_state()
 
         sample_with = sample_with if sample_with is not None else self._sample_with
         x, num_samples = self._prepare_for_sample(x, sample_shape)

@@ -12,6 +12,7 @@ import torch
 
 from sbi.utils.sbiutils import standardizing_net, standardizing_transform
 from sbi.utils.torchutils import create_alternating_binary_mask
+from sbi.utils.latent_sbi_utils import MergeNet, EmbedTheta
 
 
 def build_made(
@@ -302,11 +303,13 @@ def build_latent_maf(
     batch_z: Tensor = None,
     z_score_x: bool = True,
     z_score_y: bool = True,
-    z_score_z: bool = True,
+    z_score_z: bool = False,
+    z_score_psi: bool = True,
     hidden_features: int = 50,
     num_transforms: int = 5,
     embedding_net_y: nn.Module = nn.Identity(),
     embedding_net_z: nn.Module = nn.Identity(),
+    embedding_net_y_psi: nn.Module = nn.Identity(),
     **kwargs,
 ) -> nn.Module:
     """Builds MAF p(x|y).
@@ -364,17 +367,24 @@ def build_latent_maf(
     if z_score_z:
         embedding_net_z = nn.Sequential(standardizing_net(batch_z), embedding_net_z)
 
-    embedding_net = MergeNet(
-        embedding_net_y=embedding_net_y,
-        embedding_net_z=embedding_net_z,
-        y_dim=batch_y.shape[1],
-        z_dim=batch_z.shape[1],
+    net_that_encodes_only_y = EmbedTheta(embedding_net_y, batch_y.shape[1])
+    embedding_net_y_psi = nn.Sequential(
+        net_that_encodes_only_y,
+        embedding_net_y_psi,
     )
 
     distribution = distributions_.StandardNormal((x_numel,))
-    neural_net = flows.Flow(transform, distribution, embedding_net)
+    neural_net = flows.Flow(transform, distribution, embedding_net_y_psi)
 
-    return neural_net
+    wrapped_net = MergeNet(
+        net=neural_net,
+        embedding_z=embedding_net_z,
+        y_dim=batch_y.shape[1],
+        z_score_psi=z_score_psi,
+        batch_z=batch_z,
+    )
+
+    return wrapped_net
 
 
 def build_latent_nsf(
@@ -383,7 +393,8 @@ def build_latent_nsf(
     batch_z: Tensor = None,
     z_score_x: bool = True,
     z_score_y: bool = True,
-    z_score_z: bool = True,
+    z_score_z: bool = False,
+    z_score_psi: bool = True,
     hidden_features: int = 50,
     num_transforms: int = 5,
     num_bins: int = 10,
@@ -534,48 +545,21 @@ def build_latent_nsf(
     if z_score_z:
         embedding_net_z = nn.Sequential(standardizing_net(batch_z), embedding_net_z)
 
-    y_psi = torch.cat(
-        [embedding_net_y(batch_y), embedding_net_z(batch_z)], dim=1
-    ).detach()
-    embedding_net_y_psi = nn.Sequential(standardizing_net(y_psi), embedding_net_y_psi)
+    net_that_encodes_only_y = EmbedTheta(embedding_net_y, batch_y.shape[1])
+    embedding_net_y_psi = nn.Sequential(
+        net_that_encodes_only_y,
+        embedding_net_y_psi,
+    )
 
     distribution = distributions_.StandardNormal((x_numel,))
     neural_net = flows.Flow(transform, distribution, embedding_net_y_psi)
 
-    class MergeNet(nn.Module):
-        def __init__(self, net, embedding_y, embedding_z, y_dim, z_dim):
-            super().__init__()
-            self.flow_given_theta_psi = net
-            self.net_y = embedding_y
-            self.net_z = embedding_z
-            self.y_dim = y_dim
-            self.z_dim = z_dim
-
-        def forward(self, context: Tensor):
-            y = context[:, : self.y_dim]
-            z = context[:, self.y_dim :]
-            embedded_y = self.net_y(y)
-            embedded_z = self.net_z(z)
-            embedded_yz = torch.cat([embedded_y, embedded_z], dim=1)
-            return embedded_yz
-
-        def log_prob(self, x: Tensor, context: Tensor):
-            embedded_yz = self.forward(context)
-            # print("x", x[:5])
-            # print("embedded_yz", torch.sum(embedded_yz[:5], dim=1))
-            # print("embedded_yz", embedded_yz)
-            return self.flow_given_theta_psi.log_prob(x, context=embedded_yz)
-
-        def sample(self, num_samples: int, context):
-            embedded_yz = self.forward(context)
-            return self.flow_given_theta_psi.sample(num_samples, context=embedded_yz)
-
     wrapped_net = MergeNet(
         net=neural_net,
-        embedding_y=embedding_net_y,
         embedding_z=embedding_net_z,
         y_dim=batch_y.shape[1],
-        z_dim=batch_z.shape[1],
+        z_score_psi=z_score_psi,
+        batch_z=batch_z,
     )
 
     return wrapped_net

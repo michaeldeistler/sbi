@@ -11,8 +11,14 @@ from sbi.neural_nets.classifier import (
     build_mlp_classifier,
     build_resnet_classifier,
 )
-from sbi.neural_nets.flow import build_made, build_maf, build_nsf, build_latent_maf, build_latent_nsf
-from sbi.neural_nets.mdn import build_mdn
+from sbi.neural_nets.flow import (
+    build_made,
+    build_maf,
+    build_nsf,
+    build_latent_maf,
+    build_latent_nsf,
+)
+from sbi.neural_nets.mdn import build_mdn, build_latent_mdn
 
 
 def classifier_nn(
@@ -157,7 +163,8 @@ def likelihood_latent_nn(
     model: str,
     z_score_theta: bool = True,
     z_score_x: bool = True,
-    z_score_z: bool = True,
+    z_score_z: bool = False,
+    z_score_psi: bool = True,
     hidden_features: int = 50,
     num_transforms: int = 5,
     num_bins: int = 10,
@@ -180,6 +187,8 @@ def likelihood_latent_nn(
         z_score_x: Whether to z-score simulation outputs $x$ before passing them into
             the network.
         z_score_z: Whether to z-score latents $z$ before passing them into the network.
+            Defaults to `False` because the `embedding_net_z` has hand-picked features.
+        z_score_psi: Whether to z-score the embedded latents.
         hidden_features: Number of hidden features.
         num_transforms: Number of transforms when a flow is used. Only relevant if
             density estimator is a normalizing flow (i.e. currently either a `maf` or a
@@ -198,6 +207,7 @@ def likelihood_latent_nn(
                 "z_score_x",
                 "z_score_y",
                 "z_score_z",
+                "z_score_psi",
                 "hidden_features",
                 "num_transforms",
                 "num_bins",
@@ -209,6 +219,7 @@ def likelihood_latent_nn(
                 z_score_x,
                 z_score_theta,
                 z_score_z,
+                z_score_psi,
                 hidden_features,
                 num_transforms,
                 num_bins,
@@ -221,11 +232,11 @@ def likelihood_latent_nn(
 
     def build_fn(batch_theta, batch_x, batch_z):
         if model == "mdn":
-            raise NotImplementedError
-            return build_mdn(batch_x=batch_x, batch_y=batch_theta, **kwargs)
+            return build_latent_mdn(
+                batch_x=batch_x, batch_y=batch_theta, batch_z=batch_z, **kwargs
+            )
         if model == "made":
             raise NotImplementedError
-            return build_made(batch_x=batch_x, batch_y=batch_theta, **kwargs)
         if model == "maf":
             return build_latent_maf(
                 batch_x=batch_x, batch_y=batch_theta, batch_z=batch_z, **kwargs

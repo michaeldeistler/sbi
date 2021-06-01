@@ -278,6 +278,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
         mcmc_method: str = "slice_np",
         mcmc_parameters: Optional[Dict[str, Any]] = None,
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
+        psi_prior_eval_method: str = "kde_interpolate",
     ) -> LikelihoodLatentBasedPosterior:
         r"""
         Build posterior from the neural density estimator.
@@ -339,14 +340,14 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
             mcmc_method=mcmc_method,
             mcmc_parameters=mcmc_parameters,
             rejection_sampling_parameters=rejection_sampling_parameters,
+            psi_prior_eval_method=psi_prior_eval_method,
             device=device,
         )
 
         self._posterior._num_trained_rounds = self._round + 1
 
         # Store models at end of each round.
-        # self._model_bank.append(deepcopy(self._posterior))
-        # self._model_bank[-1].net.eval()
+        self._model_bank.append(deepcopy(self._posterior))
+        self._model_bank[-1].net.eval()
 
-        warn("Posterior did not get deepcopied also above for model bank")
-        return self._posterior
+        return deepcopy(self._posterior)
