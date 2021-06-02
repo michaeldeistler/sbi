@@ -162,6 +162,7 @@ def likelihood_nn(
 def likelihood_latent_nn(
     model: str,
     z_score_theta: bool = True,
+    z_score_theta_for_z: bool = True,
     z_score_x: bool = True,
     z_score_z: bool = False,
     z_score_psi: bool = True,
@@ -206,6 +207,7 @@ def likelihood_latent_nn(
             (
                 "z_score_x",
                 "z_score_y",
+                "z_score_y_for_z",
                 "z_score_z",
                 "z_score_psi",
                 "hidden_features",
@@ -218,6 +220,7 @@ def likelihood_latent_nn(
             (
                 z_score_x,
                 z_score_theta,
+                z_score_theta_for_z,
                 z_score_z,
                 z_score_psi,
                 hidden_features,

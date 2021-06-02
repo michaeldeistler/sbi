@@ -2,8 +2,9 @@
 # under the Affero General Public License v3, see <https://www.gnu.org/licenses/>.
 
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from warnings import warn
+from copy import deepcopy
 
 import numpy as np
 import torch
@@ -43,6 +44,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         mcmc_method: str = "slice_np",
         mcmc_parameters: Optional[Dict[str, Any]] = None,
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
+        sample_z_given_psi_parameters: Optional[Dict[str, Any]] = None,
         psi_prior_eval_method: str = "kde_interpolate",
         device: str = "cpu",
     ):
@@ -90,6 +92,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                 "__class__",
                 "prior_z",
                 "theta_dim",
+                "sample_z_given_psi_parameters",
                 "psi_prior_eval_method",
             ),
         )
@@ -107,6 +110,8 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         self._prior = MultipleIndependent(
             [self._prior_theta, self._prior_psi], validate_args=False
         )
+
+        self.sample_z_given_psi_parameters = sample_z_given_psi_parameters
 
         self._purpose = (
             "It provides MCMC to .sample() from the posterior and "
@@ -164,6 +169,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         mcmc_method: Optional[str] = None,
         mcmc_parameters: Optional[Dict[str, Any]] = None,
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
+        sample_z_given_psi_parameters: Optional[Dict] = None,
     ) -> Tensor:
         r"""
         Return samples from posterior distribution $p(\theta|x)$ with MCMC.
@@ -212,12 +218,45 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         theta = theta_psi[:, : self._theta_dim]
         psi = theta_psi[:, self._theta_dim :]
-        z = self.sample_z_given_psi(psi)
+        sample_z_given_psi_parameters = (
+            self._potentially_replace_sample_z_given_psi_parameters(
+                sample_z_given_psi_parameters
+            )
+        )
+        z = self.sample_z_given_psi(psi, theta, **sample_z_given_psi_parameters)
         samples = torch.cat([theta, z], dim=1)
 
         self.net.train(True)
 
         return samples.reshape((*sample_shape, -1))
+
+    def _potentially_replace_sample_z_given_psi_parameters(
+        self,
+        sample_z_given_psi_parameters: Optional[Dict[str, Any]],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """
+        Return potentially default values to sample from the posterior with MCMC.
+
+        Args:
+            mcmc_method: Optional parameter to override `self.mcmc_method`.
+            mcmc_parameters: Dictionary overriding the default parameters for MCMC.
+                The following parameters are supported: `thin` to set the thinning
+                factor for the chain, `warmup_steps` to set the initial number of
+                samples to discard, `num_chains` for the number of chains,
+                `init_strategy` for the initialisation strategy for chains; `prior`
+                will draw init locations from prior, whereas `sir` will use Sequential-
+                Importance-Resampling using `init_strategy_num_candidates` to find init
+                locations.
+
+        Returns: A (default) mcmc method and (potentially
+            default) mcmc parameters.
+        """
+        sample_z_given_psi_parameters = (
+            sample_z_given_psi_parameters
+            if sample_z_given_psi_parameters is not None
+            else self.sample_z_given_psi_parameters
+        )
+        return sample_z_given_psi_parameters
 
     def sample_theta_psi(
         self,
@@ -295,17 +334,55 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
 
         return samples
 
-    def sample_z_given_psi(self, psi: Tensor):
-        z_samples = self._prior_z.sample((psi.shape[0], 1_000))
-        means = torch.mean(z_samples, dim=2)
-        dist_from_mean_to_psi = torch.abs(psi - means)
-        accepted = []
-        for z, b in zip(z_samples, dist_from_mean_to_psi):
-            inds = torch.argsort(b)
-            z = z[inds[0]]
-            first_z = z
-            accepted.append(first_z)
-        return torch.stack(accepted)
+    def sample_z_given_psi(
+        self,
+        psi: Tensor,
+        theta: Tensor,
+        sample_with="closest",
+        distance_func="euclidean",
+        num_proposal_samples: int = 1_000,
+        epsilon_to_warn=0.01,
+    ):
+        print("num_proposal_samples", num_proposal_samples)
+        if sample_with == "closest":
+            z_samples = self._prior_z.sample((psi.shape[0] * num_proposal_samples,))
+            theta_reshaped = theta.repeat((num_proposal_samples, 1))
+            psi_samples = self.net.net_z(z_samples, theta_reshaped)
+            psi_samples = torch.reshape(
+                psi_samples, (num_proposal_samples, psi.shape[0], -1)
+            )
+            psi_samples = psi_samples.permute(1, 0, 2)
+            dist_to_psi = self.compute_distance(
+                distance_func, psi.unsqueeze(1), psi_samples
+            )
+            inds = torch.argsort(dist_to_psi, dim=1)
+            highest_selected_dist = dist_to_psi[range(dist_to_psi.shape[0]), inds[:, 0]]
+            if torch.any(highest_selected_dist > epsilon_to_warn):
+                warn(
+                    f"Highest error: {torch.max(highest_selected_dist)} / "
+                    f"Median error: {torch.median(highest_selected_dist)}"
+                )
+
+            z_reshaped = torch.reshape(
+                z_samples, (num_proposal_samples, psi.shape[0], -1)
+            )
+            z_reshaped = z_reshaped.permute(1, 0, 2)
+            samples = z_reshaped[range(z_reshaped.shape[0]), inds[:, 0]]
+
+        elif sample_with == "rejection":
+            raise NotImplementedError
+        else:
+            raise NameError
+        return samples
+
+    def compute_distance(self, distance_func, x, y):
+        if distance_func == "absolute":
+            dist_to_psi = torch.sum(torch.abs(x - y), dim=2)
+        elif distance_func == "euclidean":
+            dist_to_psi = torch.sqrt(torch.sum((x - y) ** 2, dim=2))
+        else:
+            raise NameError
+        return dist_to_psi
 
     def sample_conditional(
         self,

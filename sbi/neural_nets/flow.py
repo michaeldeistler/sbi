@@ -303,6 +303,7 @@ def build_latent_maf(
     batch_z: Tensor = None,
     z_score_x: bool = True,
     z_score_y: bool = True,
+    z_score_y_for_z: bool = True,
     z_score_z: bool = False,
     z_score_psi: bool = True,
     hidden_features: int = 50,
@@ -393,6 +394,7 @@ def build_latent_nsf(
     batch_z: Tensor = None,
     z_score_x: bool = True,
     z_score_y: bool = True,
+    z_score_y_for_z: bool = True,
     z_score_z: bool = False,
     z_score_psi: bool = True,
     hidden_features: int = 50,
@@ -542,8 +544,6 @@ def build_latent_nsf(
 
     if z_score_y:
         embedding_net_y = nn.Sequential(standardizing_net(batch_y), embedding_net_y)
-    if z_score_z:
-        embedding_net_z = nn.Sequential(standardizing_net(batch_z), embedding_net_z)
 
     net_that_encodes_only_y = EmbedTheta(embedding_net_y, batch_y.shape[1])
     embedding_net_y_psi = nn.Sequential(
@@ -558,8 +558,11 @@ def build_latent_nsf(
         net=neural_net,
         embedding_z=embedding_net_z,
         y_dim=batch_y.shape[1],
+        z_score_z=z_score_z,
+        z_score_theta_for_z=z_score_y_for_z,
         z_score_psi=z_score_psi,
         batch_z=batch_z,
+        batch_theta=batch_y,
     )
 
     return wrapped_net

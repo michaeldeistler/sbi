@@ -1,9 +1,11 @@
 import torch
 from torch import nn, Tensor
-from sbi.utils import standardizing_net
+from torch.nn.functional import poisson_nll_loss
+from sbi.utils.sbiutils import standardizing_net
 import torch_interpolations
 import time
 from math import prod
+import numpy as np
 
 
 class EmbedTheta(nn.Module):
@@ -34,29 +36,62 @@ class MergeNet(nn.Module):
     """
 
     def __init__(
-        self, net, embedding_z, y_dim, z_score_psi, batch_z=None, batch_theta=None
+        self,
+        net,
+        embedding_z,
+        y_dim,
+        z_score_z,
+        z_score_theta_for_z,
+        z_score_psi,
+        batch_z=None,
+        batch_theta=None,
     ):
         super().__init__()
+
         self.flow_given_theta_psi = net
-        if z_score_psi:
 
-            class FeedForwardThetaZandZScore(nn.Module):
-                """
-                This is used instead of nn.Sequential because self.net_z takes two args.
-                """
+        class FeedForwardThetaZandZScore(nn.Module):
+            """
+            This is used instead of nn.Sequential because self.net_z takes two args.
+            """
 
-                def __init__(self, net, batch_z, batch_theta):
-                    super().__init__()
-                    self.net = net
-                    psi = self.net(batch_z, batch_theta).detach()
-                    self.standardize_psi = standardizing_net(psi)
+            def __init__(
+                self,
+                net,
+                z_score_z,
+                z_score_theta_for_z,
+                z_score_psi,
+                batch_z,
+                batch_theta,
+            ):
+                super().__init__()
+                self.net = net
+                self.standardize_z = maybe_z_score_net(z_score_z, batch_z)
+                self.standardize_theta_for_z = maybe_z_score_net(
+                    z_score_theta_for_z, batch_theta
+                )
+                psi = self.forward_no_z_score_psi(batch_z, batch_theta).detach()
+                self.standardize_psi = maybe_z_score_net(z_score_psi, psi)
 
-                def forward(self, theta, z):
-                    psi = self.net(theta, z)
-                    norm_psi = self.standardize_psi(psi)
-                    return norm_psi
+            def forward_no_z_score_psi(self, theta, z):
+                z = self.standardize_z(z)
+                theta = self.standardize_theta_for_z(theta)
+                psi = self.net(theta, z)
+                return psi
 
-            self.net_z = FeedForwardThetaZandZScore(embedding_z, batch_z, batch_theta)
+            def forward(self, theta, z):
+                psi = self.forward_no_z_score_psi(theta, z)
+                norm_psi = self.standardize_psi(psi)
+                return norm_psi
+
+        self.net_z = FeedForwardThetaZandZScore(
+            embedding_z,
+            z_score_z,
+            z_score_theta_for_z,
+            z_score_psi,
+            batch_z,
+            batch_theta,
+        )
 
         self.y_dim = y_dim
 
@@ -76,6 +111,14 @@ class MergeNet(nn.Module):
         return self.flow_given_theta_psi.sample(num_samples, context=embedded_yz)
 
 
+def maybe_z_score_net(z_score, data_batch):
+    if z_score:
+        standardization_net = standardizing_net(data_batch)
+    else:
+        standardization_net = nn.Identity()
+    return standardization_net
+
+
 class PsiPrior(torch.distributions.MultivariateNormal):
     r"""
     Prior over $\psi$ given a prior over $z$ and an embedding net $\psi = f(z)$.
@@ -93,6 +136,8 @@ class PsiPrior(torch.distributions.MultivariateNormal):
             self.evaluator = KDEInterpolate(prior_psi=self)
         elif eval_method == "kde":
             self.evaluator = KDE(prior_psi=self)
+        elif eval_method == "kde_interpolate_np":
+            self.evaluator = KDEInterpolateNP(prior_psi=self)
         else:
             raise NotImplementedError
 
@@ -135,7 +180,10 @@ class KDEInterpolate:
         self.minimum, _ = torch.min(psi_samples, dim=0)
         self.maximum, _ = torch.max(psi_samples, dim=0)
         kde_vals = torch.histc(
-            psi_samples, bins=num_bins, min=self.minimum.item(), max=self.maximum.item()
+            psi_samples,
+            bins=num_bins,
+            min=self.minimum.item(),
+            max=self.maximum.item(),
         ).detach()
         bin_width = (self.maximum.item() - self.minimum.item()) / num_bins
         hist_positions = torch.linspace(
@@ -149,9 +197,63 @@ class KDEInterpolate:
         )
 
     def eval_kde(self, psi: Tensor):
+        psi = psi.contiguous()
         values_under_kde = self.rgi((psi,))
         values_under_kde[psi < self.minimum] = 0.0
         values_under_kde[psi > self.maximum] = 0.0
+        values_under_kde[values_under_kde == 0.0] = 1e-16
+        return values_under_kde / 1000.0
+
+    def log_prob(self, psi):
+        if self.rgi is None:
+            self.build_kde()
+
+        return torch.log(self.eval_kde(psi))
+
+
+class KDEInterpolateNP:
+    r"""
+    Linear interpolation for a KDE based on samples.
+
+    This uses `histogramdd` and can thus be used also for multi-dimensional $\psi$.
+    """
+
+    def __init__(self, prior_psi):
+        self.rgi = None
+        self.prior_psi = prior_psi
+
+    def update_state(self):
+        self.build_kde()
+
+    def build_kde(
+        self,
+        num_samples: int = 100_000,
+        num_bins: int = 100,
+    ):
+        psi_samples = self.prior_psi.sample((num_samples,))
+        self.minimum, _ = torch.min(psi_samples, dim=0)
+        self.maximum, _ = torch.max(psi_samples, dim=0)
+        maxima_minima = torch.stack([self.minimum, self.maximum]).T
+        kde_vals, positions = np.histogramdd(
+            psi_samples.numpy(), bins=num_bins, range=maxima_minima.tolist()
+        )
+        midpoints = [pos[:-1] + np.diff(pos) / 2 for pos in positions]
+        hist_positions = [
+            torch.as_tensor(pos, dtype=torch.float32) for pos in midpoints
+        ]
+        values = torch.as_tensor(kde_vals, dtype=torch.float32)
+        self.rgi = torch_interpolations.RegularGridInterpolator(
+            hist_positions,
+            values,
+        )
+
+    def eval_kde(self, psi: Tensor):
+        psi = psi.contiguous()
+        values_under_kde = self.rgi([p for p in psi.T])
+        for dim in range(psi.shape[1]):
+            values_under_kde[psi[:, dim] < self.minimum[dim]] = 0.0
+            values_under_kde[psi[:, dim] > self.maximum[dim]] = 0.0
+        values_under_kde[values_under_kde == 0.0] = 1e-16
         return values_under_kde / 1000.0
 
     def log_prob(self, psi):
@@ -197,6 +299,7 @@ class KDE:
         kde_values = self.kde[inds]
         kde_values[psi < self.minimum] = 0.0
         kde_values[psi > self.maximum] = 0.0
+        kde_values[kde_values == 0.0] = 1e-16
         return kde_values / 1000.0
 
     def log_prob(self, psi):

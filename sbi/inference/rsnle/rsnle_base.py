@@ -176,6 +176,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
         self,
         training_batch_size: int = 50,
         learning_rate: float = 5e-4,
+        learning_rate_z_net: float = 1e-3,
         validation_fraction: float = 0.1,
         stop_after_epochs: int = 20,
         max_num_epochs: Optional[int] = None,
@@ -252,6 +253,18 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
             self.optimizer = optim.Adam(
                 list(self._neural_net.parameters()),
                 lr=learning_rate,
+            )
+            self.optimizer = optim.Adam(
+                [
+                    {
+                        "params": self._neural_net.flow_given_theta_psi.parameters(),
+                        "lr": learning_rate,
+                    },
+                    {
+                        "params": self._neural_net.net_z.parameters(),
+                        "lr": learning_rate_z_net,
+                    },
+                ],
             )
             self.epoch, self._val_log_prob = 0, float("-Inf")
 
@@ -332,6 +345,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
         mcmc_method: str = "slice_np",
         mcmc_parameters: Optional[Dict[str, Any]] = None,
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
+        sample_z_given_psi_parameters: Optional[Dict[str, Any]] = None,
         psi_prior_eval_method: str = "kde_interpolate",
     ) -> LikelihoodLatentBasedPosterior:
         r"""
@@ -394,6 +408,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
             mcmc_method=mcmc_method,
             mcmc_parameters=mcmc_parameters,
             rejection_sampling_parameters=rejection_sampling_parameters,
+            sample_z_given_psi_parameters=sample_z_given_psi_parameters,
             psi_prior_eval_method=psi_prior_eval_method,
             device=device,
         )
