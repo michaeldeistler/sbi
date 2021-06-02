@@ -43,8 +43,8 @@ class MergeNet(nn.Module):
         z_score_z,
         z_score_theta_for_z,
         z_score_psi,
-        batch_z=None,
         batch_theta=None,
+        batch_z=None,
     ):
         super().__init__()
 
@@ -61,8 +61,8 @@ class MergeNet(nn.Module):
                 z_score_z,
                 z_score_theta_for_z,
                 z_score_psi,
-                batch_z,
                 batch_theta,
+                batch_z,
             ):
                 super().__init__()
                 self.net = net
@@ -70,7 +70,7 @@ class MergeNet(nn.Module):
                 self.standardize_theta_for_z = maybe_z_score_net(
                     z_score_theta_for_z, batch_theta
                 )
-                psi = self.forward_no_z_score_psi(batch_z, batch_theta).detach()
+                psi = self.forward_no_z_score_psi(batch_theta, batch_z).detach()
                 self.standardize_psi = maybe_z_score_net(z_score_psi, psi)
 
             def forward_no_z_score_psi(self, theta, z):
@@ -89,8 +89,8 @@ class MergeNet(nn.Module):
             z_score_z,
             z_score_theta_for_z,
             z_score_psi,
-            batch_z,
             batch_theta,
+            batch_z,
         )
 
         self.y_dim = y_dim
@@ -98,7 +98,7 @@ class MergeNet(nn.Module):
     def forward(self, context: Tensor):
         y = context[:, : self.y_dim]
         z = context[:, self.y_dim :]
-        embedded_z = self.net_z(z, y)
+        embedded_z = self.net_z(y, z)
         embedded_yz = torch.cat([y, embedded_z], dim=1)
         return embedded_yz
 
@@ -133,10 +133,13 @@ class PsiPrior(torch.distributions.MultivariateNormal):
         self.prior_theta = prior_theta
         self.embedding_net_z = embedding_net_z
         if eval_method == "kde_interpolate":
+            check_if_prior_is_independent_of_theta(self.embedding_net_z, eval_method)
             self.evaluator = KDEInterpolate(prior_psi=self)
         elif eval_method == "kde":
+            check_if_prior_is_independent_of_theta(self.embedding_net_z, eval_method)
             self.evaluator = KDE(prior_psi=self)
         elif eval_method == "kde_interpolate_np":
+            check_if_prior_is_independent_of_theta(self.embedding_net_z, eval_method)
             self.evaluator = KDEInterpolateNP(prior_psi=self)
         else:
             raise NotImplementedError
@@ -149,7 +152,7 @@ class PsiPrior(torch.distributions.MultivariateNormal):
             z_samples = self.prior_z.sample(sample_shape)
             theta_samples = self.prior_theta.sample(sample_shape)
             # `.detach()` to fix #5.
-            psi = self.embedding_net_z(z_samples, theta_samples).detach()
+            psi = self.embedding_net_z(theta_samples, z_samples).detach()
             all_samples.append(psi)
             num_drawn += num_to_draw
         return torch.cat(all_samples)
@@ -157,6 +160,26 @@ class PsiPrior(torch.distributions.MultivariateNormal):
     def log_prob(self, psi):
         log_prob = self.evaluator.log_prob(psi)
         return log_prob
+
+
+def check_if_prior_is_independent_of_theta(net, eval_method):
+    if hasattr(net, "prior_independent_of_theta"):
+        if net.prior_independent_of_theta:
+            pass
+        else:
+            raise ValueError(
+                f"You used an `embedding_net_z` that with "
+                f"`prior_independent_of_theta=False`, but your "
+                f"`eval_method={eval_method} which does not all that. Please use "
+                f"`eval_method='flow'."
+            )
+    else:
+        raise ValueError(
+            f"Your `embedding_net_z` does not have an attribute "
+            f"`prior_independent_of_theta`, but your "
+            f"`eval_method={eval_method}. If your `embedding_net_z` is independent "
+            f"of theta, please set `self.prior_independent_of_theta=True`"
+        )
 
 
 class KDEInterpolate:

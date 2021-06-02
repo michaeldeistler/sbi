@@ -346,7 +346,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         if sample_with == "closest":
             z_samples = self._prior_z.sample((psi.shape[0] * num_proposal_samples,))
             theta_reshaped = theta.repeat((num_proposal_samples, 1))
-            psi_samples = self.net.net_z(z_samples, theta_reshaped)
+            psi_samples = self.net.net_z(theta_reshaped, z_samples)
             psi_samples = torch.reshape(
                 psi_samples, (num_proposal_samples, psi.shape[0], -1)
             )
