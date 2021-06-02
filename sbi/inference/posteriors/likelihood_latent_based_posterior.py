@@ -343,7 +343,6 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         num_proposal_samples: int = 1_000,
         epsilon_to_warn=0.01,
     ):
-        print("num_proposal_samples", num_proposal_samples)
         if sample_with == "closest":
             z_samples = self._prior_z.sample((psi.shape[0] * num_proposal_samples,))
             theta_reshaped = theta.repeat((num_proposal_samples, 1))
