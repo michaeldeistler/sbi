@@ -95,11 +95,14 @@ class MeanNetTheta(nn.Module):
 
     def forward(self, theta, z):
         means_stds_heights = self.net_to_predict_means_and_stds(theta)
-        means = means_stds_heights[:, :1]
-        stds = torch.exp(means_stds_heights[:, 1:2])
-        heights = means_stds_heights[:, 2:]
-        positions = torch.linspace(0, 1, self.dim_z).unsqueeze(0)
-        positions = positions.repeat(self.dim_psi, 1)
+        means = means_stds_heights[:, : 1 * self.dim_psi]
+        stds = torch.exp(means_stds_heights[:, 1 * self.dim_psi : 2 * self.dim_psi])
+        heights = means_stds_heights[:, 2 * self.dim_psi :]
+        means = means.unsqueeze(2).repeat(1, 1, self.dim_z)
+        stds = stds.unsqueeze(2).repeat(1, 1, self.dim_z)
+        heights = heights.unsqueeze(2).repeat(1, 1, self.dim_z)
+        positions = torch.linspace(0, 1, self.dim_z).unsqueeze(0).unsqueeze(0)
+        positions = positions.repeat(theta.shape[0], self.dim_psi, 1)
         weights = heights * torch.exp(-((positions - means) ** 2) * 0.5 / stds ** 2)
         repeated_z = z.unsqueeze(1)
         repeated_z = repeated_z.repeat(1, self.dim_psi, 1)
