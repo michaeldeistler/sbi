@@ -24,9 +24,10 @@ class MeanNet(nn.Module):
         self.prior_independent_of_theta = True
 
     def forward(self, theta, z):
+        heights = self._heights_of_weights / torch.sum(self._heights_of_weights)
         positions = torch.linspace(0, 1, self.dim_z).unsqueeze(0)
         positions = positions.repeat(self.dim_psi, 1)
-        weights = self._heights_of_weights * torch.exp(
+        weights = heights * torch.exp(
             -((positions - self._means_of_weights) ** 2)
             * 0.5
             / self._stds_of_weights ** 2
@@ -98,6 +99,7 @@ class MeanNetTheta(nn.Module):
         means = means_stds_heights[:, : 1 * self.dim_psi]
         stds = torch.exp(means_stds_heights[:, 1 * self.dim_psi : 2 * self.dim_psi])
         heights = means_stds_heights[:, 2 * self.dim_psi :]
+        heights = heights / torch.sum(heights, dim=1).unsqueeze(1)
         means = means.unsqueeze(2).repeat(1, 1, self.dim_z)
         stds = stds.unsqueeze(2).repeat(1, 1, self.dim_z)
         heights = heights.unsqueeze(2).repeat(1, 1, self.dim_z)
