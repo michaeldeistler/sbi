@@ -294,13 +294,13 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
                 self.optimizer.step()
 
             self.epoch += 1
-            if self.epoch % 5 == 0:
-                print(
-                    "std",
-                    torch.exp(
-                        self._neural_net.net_z.net.bell_features._stds_of_weights
-                    ),
-                )
+            # if self.epoch % 5 == 0:
+            #     print(
+            #         "std",
+            #         torch.exp(
+            #             self._neural_net.net_z.net.bell_features._stds_of_weights
+            #         ),
+            #     )
 
             # Calculate validation performance.
             self._neural_net.eval()

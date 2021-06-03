@@ -24,13 +24,16 @@ class BellShapedFeatures(nn.Module):
         self.prior_independent_of_theta = True
 
     def forward(self, theta, z):
-        heights = self._heights_of_weights / torch.sum(self._heights_of_weights)
+        stds = torch.exp(self._stds_of_weights)
+        heights = self._heights_of_weights / torch.sum(
+            torch.abs(self._heights_of_weights)
+        )
         positions = torch.linspace(0, 1, self.dim_z).unsqueeze(0)
         positions = positions.repeat(self.dim_psi, 1)
-        weights = heights * torch.exp(
-            -((positions - self._means_of_weights) ** 2)
-            * 0.5
-            / self._stds_of_weights ** 2
+        weights = (
+            heights
+            / stds
+            * torch.exp(-((positions - self._means_of_weights) ** 2) * 0.5 / stds ** 2)
         )
         repeated_z = z.unsqueeze(1)
         repeated_z = repeated_z.repeat(1, self.dim_psi, 1)
@@ -111,13 +114,15 @@ class BellShapedFeaturesGivenTheta(nn.Module):
         means = means_stds_heights[:, : 1 * self.dim_psi]
         stds = torch.exp(means_stds_heights[:, 1 * self.dim_psi : 2 * self.dim_psi])
         heights = means_stds_heights[:, 2 * self.dim_psi :]
-        heights = heights / torch.sum(heights, dim=1).unsqueeze(1)
+        heights = heights / torch.sum(torch.abs(heights), dim=1).unsqueeze(1)
         means = means.unsqueeze(2).repeat(1, 1, self.dim_z)
         stds = stds.unsqueeze(2).repeat(1, 1, self.dim_z)
         heights = heights.unsqueeze(2).repeat(1, 1, self.dim_z)
         positions = torch.linspace(0, 1, self.dim_z).unsqueeze(0).unsqueeze(0)
         positions = positions.repeat(theta.shape[0], self.dim_psi, 1)
-        weights = heights * torch.exp(-((positions - means) ** 2) * 0.5 / stds ** 2)
+        weights = (
+            heights / stds * torch.exp(-((positions - means) ** 2) * 0.5 / stds ** 2)
+        )
         repeated_z = z.unsqueeze(1)
         repeated_z = repeated_z.repeat(1, self.dim_psi, 1)
         psi = torch.mean(weights * repeated_z, dim=2)
