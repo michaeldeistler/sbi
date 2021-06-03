@@ -3,7 +3,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 
 
-class MeanNet(nn.Module):
+class BellShapedFeatures(nn.Module):
     def __init__(self, dim_z: int, dim_psi: int):
         super().__init__()
 
@@ -39,7 +39,7 @@ class MeanNet(nn.Module):
         return psi
 
 
-class MeanNetEmbedding(nn.Module):
+class MeanNet(nn.Module):
     def __init__(
         self,
         dim_z: int,
@@ -47,44 +47,56 @@ class MeanNetEmbedding(nn.Module):
         dim_theta: int,
         num_gaussians: int = 10,
         num_hiddens: int = 10,
+        encoding_net: str = "linear",
     ):
         super().__init__()
 
-        self.mean_net = MeanNet(dim_z, num_gaussians)
-        self.encoding_net = nn.Sequential(
-            nn.Linear(num_gaussians, num_hiddens),
-            nn.BatchNorm1d(num_hiddens),
-            nn.ReLU(),
-            nn.Linear(num_hiddens, num_hiddens),
-            nn.BatchNorm1d(num_hiddens),
-            nn.ReLU(),
-            nn.Linear(num_hiddens, num_hiddens),
-            nn.BatchNorm1d(num_hiddens),
-            nn.ReLU(),
-            nn.Linear(num_hiddens, dim_psi),
-        )
+        self.bell_features = BellShapedFeatures(dim_z, num_gaussians)
+        if encoding_net == "identity":
+            assert num_gaussians == dim_psi
+            self.encoding_net == nn.Identity()
+        elif encoding_net == "linear":
+            self.encoding_net = nn.Linear(num_gaussians, dim_psi)
+        elif encoding_net == "mlp":
+            self.encoding_net = nn.Sequential(
+                nn.Linear(num_gaussians, num_hiddens),
+                nn.BatchNorm1d(num_hiddens),
+                nn.ReLU(),
+                nn.Linear(num_hiddens, num_hiddens),
+                nn.BatchNorm1d(num_hiddens),
+                nn.ReLU(),
+                nn.Linear(num_hiddens, num_hiddens),
+                nn.BatchNorm1d(num_hiddens),
+                nn.ReLU(),
+                nn.Linear(num_hiddens, dim_psi),
+            )
+        else:
+            raise NameError
 
         self.dim_z = dim_z
         self.dim_psi = dim_psi
         self.prior_independent_of_theta = True
 
     def forward(self, theta, z):
-        mean_embedding = self.mean_net(theta, z)
-        psi = self.encoding_net(mean_embedding)
+        features = self.bell_features(theta, z)
+        psi = self.encoding_net(features)
 
         return psi
 
 
-class MeanNetTheta(nn.Module):
+class BellShapedFeaturesGivenTheta(nn.Module):
     def __init__(self, dim_z: int, dim_psi: int, dim_theta: int, num_hiddens: int = 10):
         super().__init__()
 
         self.net_to_predict_means_and_stds = nn.Sequential(
             nn.Linear(dim_theta, num_hiddens),
+            nn.BatchNorm1d(num_hiddens),
             nn.ReLU(),
             nn.Linear(num_hiddens, num_hiddens),
+            nn.BatchNorm1d(num_hiddens),
             nn.ReLU(),
             nn.Linear(num_hiddens, num_hiddens),
+            nn.BatchNorm1d(num_hiddens),
             nn.ReLU(),
             nn.Linear(num_hiddens, 3 * dim_psi),
         )
@@ -113,7 +125,7 @@ class MeanNetTheta(nn.Module):
         return psi
 
 
-class MeanNetEmbeddingTheta(nn.Module):
+class MeanNetGivenTheta(nn.Module):
     def __init__(
         self,
         dim_z: int,
@@ -122,34 +134,43 @@ class MeanNetEmbeddingTheta(nn.Module):
         num_gaussians: int = 10,
         num_hiddens_mean_net: int = 10,
         num_hiddens_encoding_net: int = 10,
+        encoding_net: str = "linear",
     ):
         super().__init__()
 
-        self.mean_net = MeanNetTheta(
+        self.bell_features = BellShapedFeaturesGivenTheta(
             dim_z=dim_z,
             dim_psi=num_gaussians,
             dim_theta=dim_theta,
             num_hiddens=num_hiddens_mean_net,
         )
-        self.encoding_net = nn.Sequential(
-            nn.Linear(num_gaussians + dim_theta, num_hiddens_encoding_net),
-            nn.BatchNorm1d(num_hiddens_encoding_net),
-            nn.ReLU(),
-            nn.Linear(num_hiddens_encoding_net, num_hiddens_encoding_net),
-            nn.BatchNorm1d(num_hiddens_encoding_net),
-            nn.ReLU(),
-            nn.Linear(num_hiddens_encoding_net, num_hiddens_encoding_net),
-            nn.BatchNorm1d(num_hiddens_encoding_net),
-            nn.ReLU(),
-            nn.Linear(num_hiddens_encoding_net, dim_psi),
-        )
+        if encoding_net == "identity":
+            assert num_gaussians == dim_psi
+            self.encoding_net == nn.Identity()
+        elif encoding_net == "linear":
+            self.encoding_net = nn.Linear(num_gaussians + dim_theta, dim_psi)
+        elif encoding_net == "mlp":
+            self.encoding_net = nn.Sequential(
+                nn.Linear(num_gaussians + dim_theta, num_hiddens_encoding_net),
+                nn.BatchNorm1d(num_hiddens_encoding_net),
+                nn.ReLU(),
+                nn.Linear(num_hiddens_encoding_net, num_hiddens_encoding_net),
+                nn.BatchNorm1d(num_hiddens_encoding_net),
+                nn.ReLU(),
+                nn.Linear(num_hiddens_encoding_net, num_hiddens_encoding_net),
+                nn.BatchNorm1d(num_hiddens_encoding_net),
+                nn.ReLU(),
+                nn.Linear(num_hiddens_encoding_net, dim_psi),
+            )
+        else:
+            raise NameError
 
         self.dim_z = dim_z
         self.dim_psi = dim_psi
         self.prior_independent_of_theta = False
 
     def forward(self, theta, z):
-        mean_embedding = self.mean_net(theta, z)
+        mean_embedding = self.bell_features(theta, z)
         psi = self.encoding_net(torch.cat((mean_embedding, theta), dim=1))
 
         return psi
