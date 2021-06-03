@@ -738,7 +738,6 @@ def optimize_potential_fn(
     try:
 
         while iter_ < num_iter:
-
             optimizer.zero_grad()
             probs = potential_fn(tf_inv(optimize_inits)).squeeze()
             loss = -probs.sum()

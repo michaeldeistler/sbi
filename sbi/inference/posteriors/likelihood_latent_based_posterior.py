@@ -19,7 +19,7 @@ from sbi.utils import (
     MultipleIndependent,
 )
 from sbi.utils.torchutils import ScalarFloat, atleast_2d, ensure_theta_batched
-from sbi.utils.latent_sbi_utils import KDE, KDEInterpolate, PsiPrior
+from sbi.utils.latent_sbi_utils import KDE, KDEInterpolate, PsiPrior, ThetaPsiPrior
 
 
 class LikelihoodLatentBasedPosterior(NeuralPosterior):
@@ -46,6 +46,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
         sample_z_given_psi_parameters: Optional[Dict[str, Any]] = None,
         psi_prior_eval_method: str = "kde_interpolate",
+        psi_prior_eval_parameters: Dict = {},
         device: str = "cpu",
     ):
         """
@@ -94,6 +95,7 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
                 "theta_dim",
                 "sample_z_given_psi_parameters",
                 "psi_prior_eval_method",
+                "psi_prior_eval_parameters",
             ),
         )
         super().__init__(**kwargs)
@@ -106,10 +108,9 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
             prior_theta=self._prior_theta,
             embedding_net_z=neural_net.net_z,
             eval_method=psi_prior_eval_method,
+            evaluator_kwargs=psi_prior_eval_parameters,
         )
-        self._prior = MultipleIndependent(
-            [self._prior_theta, self._prior_psi], validate_args=False
-        )
+        self._prior = ThetaPsiPrior(self._prior_theta, self._prior_psi)
 
         self.sample_z_given_psi_parameters = sample_z_given_psi_parameters
 
@@ -270,8 +271,6 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
     ) -> Tensor:
 
         self.net.eval()
-
-        self._prior_psi.evaluator.update_state()
 
         sample_with = sample_with if sample_with is not None else self._sample_with
         x, num_samples = self._prepare_for_sample(x, sample_shape)

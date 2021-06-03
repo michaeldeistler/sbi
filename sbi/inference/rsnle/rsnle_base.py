@@ -347,6 +347,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
         rejection_sampling_parameters: Optional[Dict[str, Any]] = None,
         sample_z_given_psi_parameters: Optional[Dict[str, Any]] = None,
         psi_prior_eval_method: str = "kde_interpolate",
+        psi_prior_eval_parameters: Dict = {},
     ) -> LikelihoodLatentBasedPosterior:
         r"""
         Build posterior from the neural density estimator.
@@ -410,6 +411,7 @@ class LikelihoodLatentEstimator(NeuralInference, ABC):
             rejection_sampling_parameters=rejection_sampling_parameters,
             sample_z_given_psi_parameters=sample_z_given_psi_parameters,
             psi_prior_eval_method=psi_prior_eval_method,
+            psi_prior_eval_parameters=psi_prior_eval_parameters,
             device=device,
         )
 

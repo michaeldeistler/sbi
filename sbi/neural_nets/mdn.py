@@ -7,7 +7,7 @@ from pyknos.nflows import flows, transforms
 from torch import Tensor, nn
 
 import sbi.utils as utils
-from sbi.utils.latent_sbi_utils import MergeNet, EmbedTheta
+from sbi.neural_nets.embedding_nets import MergeNet, EmbedTheta
 
 
 def build_mdn(

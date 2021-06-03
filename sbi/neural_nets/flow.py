@@ -12,7 +12,7 @@ import torch
 
 from sbi.utils.sbiutils import standardizing_net, standardizing_transform
 from sbi.utils.torchutils import create_alternating_binary_mask
-from sbi.utils.latent_sbi_utils import MergeNet, EmbedTheta
+from sbi.neural_nets.embedding_nets import MergeNet, EmbedTheta
 
 
 def build_made(
