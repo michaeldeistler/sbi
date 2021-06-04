@@ -317,22 +317,22 @@ class KDEInterpolate:
     def update_state(self, **kwargs):
         self.build_kde(**kwargs)
 
-    def build_kde(self, num_samples: int = 100_000, num_bins: int = 100, **kwargs):
+    def build_kde(self, num_samples: int = 100_000, num_bins_hist: int = 100, **kwargs):
         theta_samples = self.prior_theta.sample((num_samples,))
         psi_samples = self.prior_psi.sample((num_samples,), theta=theta_samples)
         self.minimum, _ = torch.min(psi_samples, dim=0)
         self.maximum, _ = torch.max(psi_samples, dim=0)
         kde_vals = torch.histc(
             psi_samples,
-            bins=num_bins,
+            bins=num_bins_hist,
             min=self.minimum.item(),
             max=self.maximum.item(),
         ).detach()
-        bin_width = (self.maximum.item() - self.minimum.item()) / num_bins
+        bin_width = (self.maximum.item() - self.minimum.item()) / num_bins_hist
         hist_positions = torch.linspace(
             self.minimum.item() + bin_width / 2,
             self.maximum.item() - bin_width / 2,
-            num_bins,
+            num_bins_hist,
         )
         self.rgi = torch_interpolations.RegularGridInterpolator(
             (hist_positions,),
@@ -369,14 +369,14 @@ class KDEInterpolateNP:
     def update_state(self, **kwargs):
         self.build_kde(**kwargs)
 
-    def build_kde(self, num_samples: int = 100_000, num_bins: int = 100, **kwargs):
+    def build_kde(self, num_samples: int = 100_000, num_bins_hist: int = 100, **kwargs):
         theta_samples = self.prior_theta.sample((num_samples,))
         psi_samples = self.prior_psi.sample((num_samples,), theta=theta_samples)
         self.minimum, _ = torch.min(psi_samples, dim=0)
         self.maximum, _ = torch.max(psi_samples, dim=0)
         maxima_minima = torch.stack([self.minimum, self.maximum]).T
         kde_vals, positions = np.histogramdd(
-            psi_samples.numpy(), bins=num_bins, range=maxima_minima.tolist()
+            psi_samples.numpy(), bins=num_bins_hist, range=maxima_minima.tolist()
         )
         midpoints = [pos[:-1] + np.diff(pos) / 2 for pos in positions]
         hist_positions = [
@@ -417,14 +417,19 @@ class KDE:
     def update_state(self, **kwargs):
         self.build_kde(**kwargs)
 
-    def build_kde(self, num_samples: int = 1_000_000, num_bins: int = 100, **kwargs):
+    def build_kde(
+        self, num_samples: int = 1_000_000, num_bins_hist: int = 100, **kwargs
+    ):
         theta_samples = self.prior_theta.sample((num_samples,))
         psi_samples = self.prior_psi.sample((num_samples,), theta=theta_samples)
 
         self.minimum, _ = torch.min(psi_samples, dim=0)
         self.maximum, _ = torch.max(psi_samples, dim=0)
         self.kde = torch.histc(
-            psi_samples, bins=num_bins, min=self.minimum.item(), max=self.maximum.item()
+            psi_samples,
+            bins=num_bins_hist,
+            min=self.minimum.item(),
+            max=self.maximum.item(),
         ).detach()
 
     def eval_kde(self, psi: Tensor):

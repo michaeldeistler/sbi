@@ -5,6 +5,7 @@ from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from warnings import warn
 from copy import deepcopy
+import logging
 
 import numpy as np
 import torch
@@ -340,32 +341,50 @@ class LikelihoodLatentBasedPosterior(NeuralPosterior):
         sample_with="closest",
         distance_func="euclidean",
         num_proposal_samples: int = 1_000,
+        max_sampling_batch_size: int = 1_000,
         epsilon_to_warn=0.01,
     ):
+        logging.debug("Starting sample_z_given_psi")
         if sample_with == "closest":
-            z_samples = self._prior_z.sample((psi.shape[0] * num_proposal_samples,))
-            theta_reshaped = theta.repeat((num_proposal_samples, 1))
-            psi_samples = self.net.net_z(theta_reshaped, z_samples)
-            psi_samples = torch.reshape(
-                psi_samples, (num_proposal_samples, psi.shape[0], -1)
-            )
-            psi_samples = psi_samples.permute(1, 0, 2)
-            dist_to_psi = self.compute_distance(
-                distance_func, psi.unsqueeze(1), psi_samples
-            )
-            inds = torch.argsort(dist_to_psi, dim=1)
-            highest_selected_dist = dist_to_psi[range(dist_to_psi.shape[0]), inds[:, 0]]
-            if torch.any(highest_selected_dist > epsilon_to_warn):
-                warn(
-                    f"Highest error: {torch.max(highest_selected_dist)} / "
-                    f"Median error: {torch.median(highest_selected_dist)}"
-                )
+            num_to_draw = min(max_sampling_batch_size, num_proposal_samples)
+            num_sampled = 0
+            best_samples_from_each_iter = []
+            best_dists_from_each_iter = []
 
-            z_reshaped = torch.reshape(
-                z_samples, (num_proposal_samples, psi.shape[0], -1)
-            )
-            z_reshaped = z_reshaped.permute(1, 0, 2)
-            samples = z_reshaped[range(z_reshaped.shape[0]), inds[:, 0]]
+            while num_sampled < num_proposal_samples:
+                z_samples = self._prior_z.sample((psi.shape[0] * num_to_draw,))
+                theta_reshaped = theta.repeat((num_to_draw, 1))
+                psi_samples = self.net.net_z(theta_reshaped, z_samples)
+                psi_samples = torch.reshape(
+                    psi_samples, (num_to_draw, psi.shape[0], -1)
+                )
+                psi_samples = psi_samples.permute(1, 0, 2)
+                dist_to_psi = self.compute_distance(
+                    distance_func, psi.unsqueeze(1), psi_samples
+                )
+                inds = torch.argmin(dist_to_psi, dim=1)
+                selected_dist = dist_to_psi[range(dist_to_psi.shape[0]), inds]
+
+                z_reshaped = torch.reshape(z_samples, (num_to_draw, psi.shape[0], -1))
+                z_reshaped = z_reshaped.permute(1, 0, 2)
+                samples = z_reshaped[range(z_reshaped.shape[0]), inds]
+
+                best_samples_from_each_iter.append(samples)
+                best_dists_from_each_iter.append(selected_dist)
+
+                num_sampled += num_to_draw
+
+            best_samples = torch.stack(best_samples_from_each_iter)
+            best_dists = torch.stack(best_dists_from_each_iter)
+            minimum_dist_inds = torch.argmin(best_dists, dim=0)
+            samples = best_samples[minimum_dist_inds, range(minimum_dist_inds.shape[0])]
+            samples_dists = best_dists[minimum_dist_inds, range(best_dists.shape[1])]
+
+            if torch.any(samples_dists > epsilon_to_warn):
+                warn(
+                    f"Highest error: {torch.max(samples_dists)} / "
+                    f"Median error: {torch.median(samples_dists)}"
+                )
 
         elif sample_with == "rejection":
             raise NotImplementedError

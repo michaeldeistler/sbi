@@ -264,6 +264,7 @@ def build_nsf(
             dropout_probability=0.0,
             use_batch_norm=False,
         )
+    print("bound6 snle")
 
     transform = transforms.CompositeTransform(
         [
@@ -274,7 +275,7 @@ def build_nsf(
                         transform_net_create_fn=conditioner,
                         num_bins=num_bins,
                         tails="linear",
-                        tail_bound=3.0,
+                        tail_bound=6.0,
                         apply_unconditional_transform=False,
                     ),
                     transforms.LULinear(x_numel, identity_init=True),
@@ -519,6 +520,8 @@ def build_latent_nsf(
             use_batch_norm=False,
         )
 
+    print("bound6 ")
+
     transform = transforms.CompositeTransform(
         [
             transforms.CompositeTransform(
@@ -528,7 +531,7 @@ def build_latent_nsf(
                         transform_net_create_fn=conditioner,
                         num_bins=num_bins,
                         tails="linear",
-                        tail_bound=3.0,
+                        tail_bound=6.0,
                         apply_unconditional_transform=False,
                     ),
                     transforms.LULinear(x_numel, identity_init=True),

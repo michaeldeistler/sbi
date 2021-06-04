@@ -57,7 +57,7 @@ class MeanNet(nn.Module):
         self.bell_features = BellShapedFeatures(dim_z, num_gaussians)
         if encoding_net == "identity":
             assert num_gaussians == dim_psi
-            self.encoding_net == nn.Identity()
+            self.encoding_net = nn.Identity()
         elif encoding_net == "linear":
             self.encoding_net = nn.Linear(num_gaussians, dim_psi)
         elif encoding_net == "mlp":
